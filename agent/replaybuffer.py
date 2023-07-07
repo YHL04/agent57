@@ -34,6 +34,7 @@ class Block:
     actions: torch.tensor
     rewards: torch.tensor
     states: torch.tensor
+    dones: torch.tensor
     idxs: List[List[int]]
 
 
@@ -46,7 +47,7 @@ class ReplayBuffer:
     Parameters:
     buffer_size (int): Size of self.buffer
     batch_size (int): Training batch size
-    block_len (int): Time step length of blocks
+    block (int): Time step length of blocks
     d_model (int): Dimension of model
     n_step (int): N step returns
     gamma (float): gamma constant for next q in q learning
@@ -59,8 +60,7 @@ class ReplayBuffer:
     def __init__(self,
                  buffer_size,
                  batch_size,
-                 block_len,
-                 d_model,
+                 block,
                  n_step,
                  gamma,
                  sample_queue,
@@ -70,9 +70,7 @@ class ReplayBuffer:
 
         self.buffer_size = buffer_size
         self.batch_size = batch_size
-        self.block_len = block_len
-
-        self.d_model = d_model
+        self.block = block
         self.n_step = n_step
 
         self.gamma = np.full(n_step, gamma)**(np.arange(n_step))
@@ -108,7 +106,7 @@ class ReplayBuffer:
     def add_data(self):
         """asynchronously add episodes to buffer by calling add()"""
         while True:
-            time.sleep(0.1)
+            time.sleep(0.001)
 
             if not self.sample_queue.empty():
                 data = self.sample_queue.get_nowait()
@@ -117,7 +115,7 @@ class ReplayBuffer:
     def prepare_data(self):
         """asynchronously add batches to batch_queue by calling sample_batch()"""
         while True:
-            time.sleep(0.1)
+            time.sleep(0.001)
 
             if not self.batch_queue.full() and self.size != 0:
                 data = self.sample_batch()
@@ -126,7 +124,7 @@ class ReplayBuffer:
     def update_data(self):
         """asynchronously update states inside buffer by calling update_priorities()"""
         while True:
-            time.sleep(0.1)
+            time.sleep(0.001)
 
             if not self.priority_queue.empty():
                 data = self.priority_queue.get_nowait()
@@ -172,49 +170,51 @@ class ReplayBuffer:
 
         with self.lock:
 
-            allocs = []
-            ids = []
+            obs = []
             actions = []
             rewards = []
             states = []
+            dones = []
             idxs = []
 
             for _ in range(self.batch_size):
                 buffer_idx = random.randrange(0, self.size)
-                time_idx = random.randrange(0, self.buffer[buffer_idx].length-self.n_step-self.block_len+1)
+                time_idx = random.randrange(0, self.buffer[buffer_idx].length-self.n_step-self.block+1)
                 idxs.append([buffer_idx, time_idx])
 
                 rewards.append([
                     self.buffer[buffer_idx].rewards[time_idx+t:time_idx+t+self.n_step]
-                    for t in range(self.block_len)
+                    for t in range(self.block)
                 ])
-                allocs.append(self.buffer[buffer_idx].allocs[time_idx:time_idx+self.block_len+self.n_step])
-                actions.append(self.buffer[buffer_idx].actions[time_idx:time_idx+self.block_len+self.n_step])
+                obs.append(self.buffer[buffer_idx].obs[time_idx:time_idx+self.block+self.n_step])
+                actions.append(self.buffer[buffer_idx].actions[time_idx:time_idx+self.block+self.n_step])
                 states.append(torch.tensor(self.buffer[buffer_idx].states[time_idx]))
+                dones.append(True if time_idx==self.buffer[buffer_idx].length-self.n_step-self.block
+                             else False)
 
-            obs = torch.tensor(np.stack(allocs)).view(self.batch_size, self.block_len+self.n_step, 1)
-            actions = torch.tensor(np.stack(actions)).view(self.batch_size, self.block_len+self.n_step, 1)
-            states = torch.concat(states, dim=1)
+            obs = torch.tensor(np.stack(obs), dtype=torch.float32) / 255.
+            actions = torch.tensor(np.stack(actions), dtype=torch.int32)
+            rewards = torch.tensor(np.sum(np.array(rewards) * self.gamma, axis=2), dtype=torch.float32)
+            states = None
+            dones = torch.tensor(dones, dtype=torch.bool)
 
-            rewards = torch.tensor(np.sum(np.array(rewards) * self.gamma, axis=2),
-                                   dtype=torch.float32
-                                   ).view(self.batch_size, self.block_len, 1)
+            obs = obs.transpose(0, 1)
+            actions = actions.transpose(0, 1).unsqueeze(-1)
+            rewards = rewards.transpose(0, 1).unsqueeze(-1)
+            # states = states.to(torch.float32)
+            dones = dones.unsqueeze(-1)
 
-            obs = obs.transpose(0, 1).to(torch.float32)
-            actions = actions.transpose(0, 1).unsqueeze(2).to(torch.float32)
-            rewards = rewards.transpose(0, 1).to(torch.float32)
-            states = states.to(torch.float32)
+            assert obs.shape == (self.block+self.n_step, self.batch_size, 4, 105, 80)
+            assert actions.shape == (self.block+self.n_step, self.batch_size, 1)
+            assert rewards.shape == (self.block, self.batch_size, 1)
+            # assert states[0].size == (self.batch_size, 512) and states[1].size == (self.batch_size == 512)
+            assert dones.shape == (self.batch_size, 1)
 
-            assert obs.shape == (self.block_len+self.n_step, self.batch_size, 1)
-            assert actions.shape == (self.block_len+self.n_step, self.batch_size, 1, 1)
-            assert rewards.shape == (self.block_len, self.batch_size, 1)
-            assert states.size(1) == self.batch_size
-
-            block = Block(allocs=allocs,
-                          ids=ids,
+            block = Block(obs=obs,
                           actions=actions,
                           rewards=rewards,
                           states=states,
+                          dones=dones,
                           idxs=idxs
                           )
 
@@ -227,22 +227,22 @@ class ReplayBuffer:
 
         Parameters:
         idxs (List[List[buffer_idx, time_idx]]): indices of states
-        states (Array[batch_size, block_len+n_step, state_len, d_model]): new recurrent states
+        states (Array[batch_size, block+n_step, state_len, d_model]): new recurrent states
         loss (float): critic loss
         bert_loss (float): bert loss
         epsilon (float): epsilon of Learner for logging purposes
 
         """
-        assert states.shape[0] == self.batch_size
-        assert states.shape[1] == self.block_len+self.n_step
+        # assert states.shape[0] == self.batch_size
+        # assert states.shape[1] == self.block+self.n_step
 
         with self.lock:
 
             # update new state for each sample in batch
-            for idx, state in zip(idxs, states):
-                buffer_idx, time_idx = idx
+            # for idx, state in zip(idxs, states):
+            #     buffer_idx, time_idx = idx
 
-                # self.buffer[buffer_idx].states[time_idx:time_idx+self.block_len+self.n_step] = state
+            #     self.buffer[buffer_idx].states[time_idx:time_idx+self.block+self.n_step] = state
 
             # log
             self.logger.total_updates += 1
@@ -287,7 +287,7 @@ class LocalBuffer:
         self.reward_buffer.append(reward)
         self.state_buffer.append(state)
 
-    def finish(self, tickers, total_reward, total_time):
+    def finish(self, total_reward, total_time):
         """
         This function is called after episode ends. lists are
         converted into numpy arrays and lists are cleared for
@@ -299,9 +299,9 @@ class LocalBuffer:
         total_time (float): total time for actor to complete episode in seconds
 
         """
-        obs = np.stack(self.obs_buffer)
-        actions = np.stack(self.action_buffer)
-        rewards = np.stack(self.reward_buffer)
+        obs = np.stack(self.obs_buffer).astype(np.uint8)
+        actions = np.stack(self.action_buffer).astype(np.int32)
+        rewards = np.stack(self.reward_buffer).astype(np.float32)
         states = np.stack(self.state_buffer)
 
         length = len(obs)

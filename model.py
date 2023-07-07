@@ -13,7 +13,7 @@ class ConvLSTM(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
         self.conv4 = nn.Conv2d(64, 1024, kernel_size=7, stride=1)
-        self.fc = nn.Linear(7 * 7 * 64, 512)
+        self.fc = nn.Linear(3456, 512)
 
         self.lstm = nn.LSTMCell(512, 512)
         self.out = nn.Linear(512, action_size)

@@ -11,6 +11,10 @@ def preprocess_frame(frame):
     frame = np.mean(frame, axis=2).astype(np.uint8)
     frame = frame[::2, ::2]
 
+    # temporary
+    # frame = frame.astype(np.float32)
+    # frame /= 255.0
+
     return frame
 
 
@@ -40,9 +44,8 @@ class Env:
         self.fire = True
         frame, _ = self.env.reset()
 
-        if not self.training:
-            for i in range(random.randint(1, self.no_op_max)):
-                frame, _, _, _ = self.env.step(1)
+        for i in range(random.randint(1, self.no_op_max)):
+            frame, _, _, _, _ = self.env.step(1)
 
         self.stack.append(preprocess_frame(frame))
         return np.array(self.stack, dtype=np.float32)

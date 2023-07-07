@@ -11,10 +11,11 @@ from agent import Learner
 
 
 def run_worker(rank,
+               env_name,
                buffer_size,
                batch_size,
-               burnin_len,
-               rollout_len,
+               burnin,
+               rollout,
                n_step,
                n_cos,
                n_tau
@@ -26,10 +27,10 @@ def run_worker(rank,
 
     Threads:
         - Learner.answer_requests(time.sleep(0.0001))
-        - Learner.prepare_data(time.sleep(0.1))
-        - ReplayBuffer.add_data()
-        - ReplayBuffer.prepare_data(time.sleep(0.1))
-        - ReplayBuffer.update_data(time.sleep(0.1))
+        - Learner.prepare_data(time.sleep(0.001))
+        - ReplayBuffer.add_data(time.sleep(0.001))
+        - ReplayBuffer.prepare_data(time.sleep(0.001))
+        - ReplayBuffer.update_data(time.sleep(0.001))
         - ReplayBuffer.log_data(time.sleep(10))
 
     """
@@ -41,13 +42,14 @@ def run_worker(rank,
         learner_rref = rpc.remote(
             "learner",
             Learner,
-            args=(buffer_size,
+            args=(env_name,
+                  buffer_size,
                   batch_size,
                   n_cos,
                   n_tau,
                   n_step,
-                  burnin_len,
-                  rollout_len
+                  burnin,
+                  rollout
                   ),
             timeout=0
         )
@@ -64,10 +66,11 @@ def run_worker(rank,
     rpc.shutdown()
 
 
-def main(buffer_size,
+def main(env_name,
+         buffer_size,
          batch_size,
-         burnin_len,
-         rollout_len,
+         burnin,
+         rollout,
          n_step,
          n_cos,
          n_tau
@@ -78,10 +81,11 @@ def main(buffer_size,
 
     mp.spawn(
         run_worker,
-        args=(buffer_size,
+        args=(env_name,
+              buffer_size,
               batch_size,
-              burnin_len,
-              rollout_len,
+              burnin,
+              rollout,
               n_step,
               n_cos,
               n_tau
@@ -92,10 +96,11 @@ def main(buffer_size,
 
 
 if __name__ == "__main__":
-    main(buffer_size=100000,
-         batch_size=16,
-         burnin_len=0,
-         rollout_len=1,
+    main(env_name="BreakoutDeterministic-v4",
+         buffer_size=10_000,
+         batch_size=32,
+         burnin=0,
+         rollout=10,
          n_step=1,
          n_cos=64,
          n_tau=64

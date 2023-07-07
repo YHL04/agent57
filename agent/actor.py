@@ -1,8 +1,9 @@
 
 
 import time
+import numpy as np
 
-from .replay_buffer import LocalBuffer
+from .replaybuffer import LocalBuffer
 from environment import Env
 
 
@@ -61,7 +62,7 @@ class Actor:
 
         while True:
             obs = self.env.reset()
-            state = None
+            state = (np.zeros((1, 512)), np.zeros((1, 512)))
             action, state = self.get_action(obs, state).wait()
 
             start = time.time()
@@ -82,4 +83,5 @@ class Actor:
             episode = self.local_buffer.finish(total_reward, time.time()-start)
             self.return_episode(episode).wait()
 
-            self.env.render_episode()
+            if self.id == 1:
+                self.env.render()
