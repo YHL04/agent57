@@ -4,7 +4,10 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
+import numpy as np
+
 from models import ConvNet
+from runningmeanstd import RunningMeanStd
 
 
 class LifelongNovelty:
@@ -16,6 +19,16 @@ class LifelongNovelty:
         self.target = ConvNet()
 
         self.opt = optim.Adam(self.predictor.parameters(), lr=lr)
+
+        self.normalizer = RunningMeanStd()
+
+    def normalize_reward(self, reward):
+        """Compute returns then normalize the intrinsic reward based on these returns"""
+
+        self.normalizer.update_single(reward)
+
+        norm_reward = reward / np.sqrt(self.normalizer.var + 1e-8)
+        return norm_reward.item()
 
     def get_reward(self, obs):
         norm_obs = self.normalize_obs(obs)
