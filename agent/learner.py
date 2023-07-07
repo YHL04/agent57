@@ -21,7 +21,8 @@ from copy import deepcopy
 from .actor import Actor
 from .replaybuffer import ReplayBuffer
 
-from model import ConvLSTM
+from model import Model, EmbeddingNet
+from curiosity import EpisodicNovelty, LifelongNovelty
 
 
 class Learner:
@@ -71,7 +72,11 @@ class Learner:
 
         # models
         self.action_size = gym.make(env_name).action_space.n
-        model = ConvLSTM(action_size=self.action_size)
+        model = Model(action_size=self.action_size)
+
+        # episodic novelty module
+        # self.embedding = EmbeddingNet()
+        # self.episodic_novelty = EpisodicNovelty()
 
         self.model = nn.DataParallel(deepcopy(model)).cuda()
         self.target_model = nn.DataParallel(deepcopy(model)).cuda()
@@ -287,12 +292,18 @@ class Learner:
         loss, new_states = self.train_step(obs=obs.cuda(),
                                            actions=actions.cuda(),
                                            rewards=rewards.cuda(),
-                                           states=None,#(states[0].cuda(), states[1].cuda()),
+                                           states=(states[0].cuda(), states[1].cuda()),
                                            dones=dones.cuda()
                                            )
 
+        # reformat List[Tuple(Tensor, Tensor)] to array of shape (bsz, block_len+n_step, 2, dim)
+        states1, states2 = zip(*new_states)
+        states1 = torch.stack(states1).transpose(0, 1).cpu().numpy()
+        states2 = torch.stack(states2).transpose(0, 1).cpu().numpy()
+        new_states = np.stack([states1, states2], 2)
+
         # update new states to buffer
-        self.priority_queue.put((idxs, None, loss, self.epsilon))
+        self.priority_queue.put((idxs, new_states, loss, self.epsilon))
 
         # soft update target model
         if self.updates % self.update_every == 0:
@@ -325,8 +336,7 @@ class Learner:
         """
 
         with torch.no_grad():
-            state = (torch.zeros(self.batch_size, 512).to(self.device),
-                     torch.zeros(self.batch_size, 512).to(self.device))
+            state = (states[0].detach().clone(), states[1].detach().clone())
 
             new_states = []
             for t in range(self.burnin+self.n_step):
@@ -373,6 +383,27 @@ class Learner:
 
         loss = loss.item()
         return loss, new_states
+
+    def update_novelty(self, obs, actions):
+        self.novelty_opt.zero_grad()
+        loss = self.emb_loss(obs, actions)
+        loss.backward()
+        self.novelty_opt.step()
+
+    def emb_loss(self, obs, actions):
+        """
+        Args:
+            obs (torch.Tensor): shape (block+n_step, bsz, 4, 105, 80)
+            actions (torch.Tensor): shape (block+n_step, bsz, 1)
+        """
+
+        # Get obs, next_obs and action, and flatten time and batch dimension
+        obs1 = torch.flatten(obs[:-1, ...], 0, 1)
+        obs2 = torch.flatten(obs[1:, ...], 0, 1)
+        actions = torch.flatten(actions[:-1, ...], 0, 1)
+
+        loss = self.episodic_novelty(obs1, obs2, actions)
+        return loss
 
     @staticmethod
     def soft_update(target, source, tau):

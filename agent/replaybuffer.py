@@ -195,19 +195,19 @@ class ReplayBuffer:
             obs = torch.tensor(np.stack(obs), dtype=torch.float32) / 255.
             actions = torch.tensor(np.stack(actions), dtype=torch.int32)
             rewards = torch.tensor(np.sum(np.array(rewards) * self.gamma, axis=2), dtype=torch.float32)
-            states = None
+            states = torch.tensor(np.stack(states), dtype=torch.float32)
+            states = (states[:, 0, :], states[:, 1, :])
             dones = torch.tensor(dones, dtype=torch.bool)
 
             obs = obs.transpose(0, 1)
             actions = actions.transpose(0, 1).unsqueeze(-1)
             rewards = rewards.transpose(0, 1).unsqueeze(-1)
-            # states = states.to(torch.float32)
             dones = dones.unsqueeze(-1)
 
             assert obs.shape == (self.block+self.n_step, self.batch_size, 4, 105, 80)
             assert actions.shape == (self.block+self.n_step, self.batch_size, 1)
             assert rewards.shape == (self.block, self.batch_size, 1)
-            # assert states[0].size == (self.batch_size, 512) and states[1].size == (self.batch_size == 512)
+            assert states[0].shape == (self.batch_size, 512) and states[1].shape == (self.batch_size, 512)
             assert dones.shape == (self.batch_size, 1)
 
             block = Block(obs=obs,
@@ -227,22 +227,24 @@ class ReplayBuffer:
 
         Parameters:
         idxs (List[List[buffer_idx, time_idx]]): indices of states
-        states (Array[batch_size, block+n_step, state_len, d_model]): new recurrent states
+        states (Array[batch_size, block+n_step, 2, dim]): new recurrent states
         loss (float): critic loss
         bert_loss (float): bert loss
         epsilon (float): epsilon of Learner for logging purposes
 
         """
-        # assert states.shape[0] == self.batch_size
-        # assert states.shape[1] == self.block+self.n_step
+        assert states.shape == (self.batch_size, self.block+self.n_step, 2, 512)
 
         with self.lock:
 
             # update new state for each sample in batch
-            # for idx, state in zip(idxs, states):
-            #     buffer_idx, time_idx = idx
+            for idx, state in zip(idxs, states):
+                buffer_idx, time_idx = idx
 
-            #     self.buffer[buffer_idx].states[time_idx:time_idx+self.block+self.n_step] = state
+                try:
+                    self.buffer[buffer_idx].states[time_idx:time_idx+self.block+self.n_step] = state
+                except ValueError:
+                    pass
 
             # log
             self.logger.total_updates += 1
@@ -276,11 +278,10 @@ class LocalBuffer:
         This function is called after every time step to store data into list
 
         Parameters:
-        alloc (float): allocation value
-        timestep (datetime.datetime): timestamp of current time step
-        action (float): recorded action
-        reward (float): recorded reward
-        state (Array[1, state_len, d_model]): recurrent state before model newly generated recurrent state
+            obs (Array): observed frame
+            action (float): recorded action
+            reward (float): recorded reward
+            state (Array): recurrent state before model newly generated recurrent state
         """
         self.obs_buffer.append(obs)
         self.action_buffer.append(action)
@@ -302,7 +303,7 @@ class LocalBuffer:
         obs = np.stack(self.obs_buffer).astype(np.uint8)
         actions = np.stack(self.action_buffer).astype(np.int32)
         rewards = np.stack(self.reward_buffer).astype(np.float32)
-        states = np.stack(self.state_buffer)
+        states = np.stack(self.state_buffer).astype(np.float32)
 
         length = len(obs)
 

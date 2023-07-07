@@ -14,7 +14,7 @@ class Actor:
     Episode to Learner through rpc. All communication is through numpy array.
 
     Parameters:
-    learner_rref (RRef): Learner RRef to reference the learner
+        learner_rref (RRef): Learner RRef to reference the learner
     """
 
     def __init__(self, learner_rref, id, env_name):
@@ -30,13 +30,13 @@ class Actor:
         Uses learner RRef and rpc async to call queue_request to get action
         from learner.
 
-        Parameters:
-        obs (np.array): frames with shape (batch_size, n_channels, h, w)
-        state (np.array): recurrent states with shape (batch_size, state_len, d_model)
+        Args:
+            obs (np.array): frames with shape (batch_size, n_channels, h, w)
+            state (np.array): recurrent states with shape (batch_size, state_len, d_model)
 
         Returns:
-        Future() object that when used with .wait(), halts until value is ready from
-        the learner. It returns action(float) and state(np.array)
+            Future() object that when used with .wait(), halts until value is ready from
+            the learner. It returns action(float) and state(np.array)
 
         """
         return self.learner_rref.rpc_async().queue_request(obs, state)
@@ -47,10 +47,10 @@ class Actor:
         to call return_episode to return Episode object to learner for training.
 
         Parameters:
-        episode (Episode)
+            episode (Episode)
 
         Returns:
-        future_await (Future): halts with .wait() until learner is finished
+            future_await (Future): halts with .wait() until learner is finished
         """
         return self.learner_rref.rpc_async().return_episode(episode)
 
@@ -73,7 +73,7 @@ class Actor:
                 action, next_state = self.get_action(obs, state).wait()
                 next_obs, reward, done = self.env.step(action)
 
-                self.local_buffer.add(obs, action, reward, state)
+                self.local_buffer.add(obs, action, reward, (state[0].squeeze(), state[1].squeeze()))
 
                 obs = next_obs
                 state = next_state
