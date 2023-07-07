@@ -70,10 +70,10 @@ class Actor:
             done = False
 
             while not done:
-                action, next_state = self.get_action(obs, state).wait()
+                action, next_state, intrinsic = self.get_action(obs, state).wait()
                 next_obs, reward, done = self.env.step(action)
 
-                self.local_buffer.add(obs, action, reward, (state[0].squeeze(), state[1].squeeze()))
+                self.local_buffer.add(obs, action, reward, intrinsic, (state[0].squeeze(), state[1].squeeze()))
 
                 obs = next_obs
                 state = next_state

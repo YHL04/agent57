@@ -21,7 +21,7 @@ from copy import deepcopy
 from .actor import Actor
 from .replaybuffer import ReplayBuffer
 
-from model import Model, EmbeddingNet
+from models import Model, EmbeddingNet
 from curiosity import EpisodicNovelty, LifelongNovelty
 
 
@@ -75,8 +75,7 @@ class Learner:
         model = Model(action_size=self.action_size)
 
         # episodic novelty module
-        # self.embedding = EmbeddingNet()
-        # self.episodic_novelty = EpisodicNovelty()
+        self.episodic_novelty = EpisodicNovelty()
 
         self.model = nn.DataParallel(deepcopy(model)).cuda()
         self.target_model = nn.DataParallel(deepcopy(model)).cuda()
@@ -199,22 +198,24 @@ class Learner:
 
         with self.lock_model:
             q_values, state = self.eval_model(obs, state)
+            intrinsic = self.episodic_novelty.get_reward(obs)
+
             state = (state[0].detach().cpu().numpy(),
                      state[1].detach().cpu().numpy())
 
         if random.random() <= self.epsilon:
-            return random.randrange(0, self.action_size), state
+            return random.randrange(0, self.action_size), state, intrinsic
 
         action = torch.argmax(q_values.squeeze()).detach().cpu().squeeze().item()
-        return action, state
+        return action, state, intrinsic
 
     def get_action(self, obs, state):
         obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0) / 255.
         state = (torch.tensor(state[0], dtype=torch.float32, device=self.device),
                  torch.tensor(state[1], dtype=torch.float32, device=self.device))
 
-        action, state = self.get_policy(obs, state)
-        return action, state
+        action, state, intrinsic = self.get_policy(obs, state)
+        return action, state, intrinsic
 
     def answer_requests(self):
         """
@@ -295,6 +296,9 @@ class Learner:
                                            states=(states[0].cuda(), states[1].cuda()),
                                            dones=dones.cuda()
                                            )
+        intr_loss = self.train_novelty_step(obs=obs,
+                                            actions=actions
+                                            )
 
         # reformat List[Tuple(Tensor, Tensor)] to array of shape (bsz, block_len+n_step, 2, dim)
         states1, states2 = zip(*new_states)
@@ -312,8 +316,9 @@ class Learner:
         # transfer weights to eval model
         with self.lock_model:
             self.hard_update(self.eval_model, self.model)
+            self.episodic_novelty.update_eval()
 
-        return loss
+        return loss, intr_loss
 
     def train_step(self, obs, actions, rewards, states, dones):
         """
@@ -384,13 +389,12 @@ class Learner:
         loss = loss.item()
         return loss, new_states
 
-    def update_novelty(self, obs, actions):
-        self.novelty_opt.zero_grad()
-        loss = self.emb_loss(obs, actions)
-        loss.backward()
-        self.novelty_opt.step()
+    def train_novelty_step(self, obs, actions):
+        emb_loss = self.train_emb_step(obs, actions)
 
-    def emb_loss(self, obs, actions):
+        return emb_loss
+
+    def train_emb_step(self, obs, actions):
         """
         Args:
             obs (torch.Tensor): shape (block+n_step, bsz, 4, 105, 80)
@@ -402,7 +406,7 @@ class Learner:
         obs2 = torch.flatten(obs[1:, ...], 0, 1)
         actions = torch.flatten(actions[:-1, ...], 0, 1)
 
-        loss = self.episodic_novelty(obs1, obs2, actions)
+        loss = self.episodic_novelty.update(obs1, obs2, actions)
         return loss
 
     @staticmethod

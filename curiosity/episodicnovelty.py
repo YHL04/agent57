@@ -1,52 +1,62 @@
 
 
 import torch
+import torch.optim as optim
+import torch.nn.functional as F
 import faiss
+
+from copy import deepcopy
+
+from models import EmbeddingNet
+from .runningmeanstd import RunningMeanStd
 
 
 class EpisodicNovelty:
 
     def __init__(self,
-                 model,
-                 capacity,
-                 num_neighbors,
+                 N=5,
+                 lr=5e-4,
                  kernel_epsilon=0.0001,
                  cluster_distance=0.008,
                  max_similarity=8.0,
                  c_constant=0.001
                  ):
 
-        self.model = model
-        self.buffer = None
+        # dimension is always 512
+        model = EmbeddingNet()
 
-        self.capacity = capacity
+        self.model = deepcopy(model)
+        self.eval_model = deepcopy(model)
 
-        self.num_neighbors = num_neighbors
+        self.opt = optim.Adam(self.model.parameters(), lr=lr)
+
+        self.index = faiss.IndexFlatL2(512, N)
+        self.normalizer = RunningMeanStd()
+
+        self.N = N
         self.kernel_epsilon = kernel_epsilon
         self.cluster_distance = cluster_distance
         self.max_similarity = max_similarity
         self.c_constant = c_constant
 
     def reset(self):
-        self.memory.clear()
+        self.index.reset()
 
     def add(self, emb):
-        self.memory.add(emb)
+        self.index.add(emb)
 
     def knn_query(self, emb):
-        vectors = None
-        dist = None
+        distance, _ = self.index.search(emb, self.N)
+        return distance
 
-        return vectors, dist
+    def get_reward(self, obs):
+        emb = self.eval_model(obs).squeeze(0)
 
-    def compute_bonus(self, obs):
-        emb = self.model(obs).squeeze(0)
+        dist = self.knn_query(emb)
         self.add(emb)
 
-        vectors, dist = self.knn_query(emb, self.num_neighbors)
-
         # update running mean
-        self.normalizer.update(dist)
+        self.normalizer.update_single(dist)
 
         # normalize distances with running mean
         distance_rate = dist / (self.normalizer.mean + 1e-8)
@@ -68,6 +78,19 @@ class EpisodicNovelty:
 
         return (1 / similarity).cpu().item()
 
-    def load_state_dict(self, state_dict):
-        self.model.load_state_dict(state_dict)
+    def update(self, obs1, obs2, actions):
+        emb1 = self.model.forward(obs1)
+        emb2 = self.model.forward(obs2)
+        emb = torch.concat([emb1, emb2], dim=-1)
+        logits = self.model.inverse(emb)
+
+        self.opt.zero_grad()
+        loss = F.cross_entropy(logits, actions)
+        loss = loss.mean()
+        self.opt.step()
+
+        return loss.item()
+
+    def update_eval(self):
+        self.eval_model.load_state_dict(self.model.state_dict())
 

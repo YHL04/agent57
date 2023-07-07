@@ -19,6 +19,7 @@ class Episode:
     obs: np.array
     actions: np.array
     rewards: np.array
+    intrinsic: np.array
     states: np.array
     length: int
     total_reward: float
@@ -271,9 +272,10 @@ class LocalBuffer:
         self.obs_buffer = []
         self.action_buffer = []
         self.reward_buffer = []
+        self.intrinsic_buffer = []
         self.state_buffer = []
 
-    def add(self, obs, action, reward, state):
+    def add(self, obs, action, reward, intrinsic, state):
         """
         This function is called after every time step to store data into list
 
@@ -286,6 +288,7 @@ class LocalBuffer:
         self.obs_buffer.append(obs)
         self.action_buffer.append(action)
         self.reward_buffer.append(reward)
+        self.intrinsic_buffer.append(intrinsic)
         self.state_buffer.append(state)
 
     def finish(self, total_reward, total_time):
@@ -295,21 +298,25 @@ class LocalBuffer:
         next episode
 
         Parameters:
-        tickers (List[2]): List of tickers e.g. ["AAPL", "GOOGL"]
-        total_reward (float): normalized total reward for benchmarking
-        total_time (float): total time for actor to complete episode in seconds
+            tickers (List[2]): List of tickers e.g. ["AAPL", "GOOGL"]
+            total_reward (float): normalized total reward for benchmarking
+            total_time (float): total time for actor to complete episode in seconds
 
         """
         obs = np.stack(self.obs_buffer).astype(np.uint8)
         actions = np.stack(self.action_buffer).astype(np.int32)
         rewards = np.stack(self.reward_buffer).astype(np.float32)
+        intrinsics = np.stack(self.intrinsic_buffer).astype(np.float32)
         states = np.stack(self.state_buffer).astype(np.float32)
+
+        rewards = rewards + intrinsics
 
         length = len(obs)
 
         self.obs_buffer.clear()
         self.action_buffer.clear()
         self.reward_buffer.clear()
+        self.intrinsic_buffer.clear()
         self.state_buffer.clear()
 
         return Episode(obs=obs,
