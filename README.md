@@ -21,9 +21,16 @@ An unofficial implementation of Agent57 for Atari from DeepMind
 
 ## Relevant Papers
 
-Recurrent Experience Replay in Distributed Reinforcement Learning (R2D2): https://openreview.net/pdf?id=r1lyTjAqYX
-Never Give Up: Learning Directed Exploration Strategies (NGU): https://arxiv.org/pdf/2002.06038.pdf
-Agent57: Outperforming the Atari Human Benchmark (Agent57): https://arxiv.org/pdf/2003.13350.pdf
+Recurrent Experience Replay in Distributed Reinforcement Learning (R2D2): 
+https://openreview.net/pdf?id=r1lyTjAqYX
+
+
+Never Give Up: Learning Directed Exploration Strategies (NGU): 
+https://arxiv.org/pdf/2002.06038.pdf
+
+
+Agent57: Outperforming the Atari Human Benchmark (Agent57): 
+https://arxiv.org/pdf/2003.13350.pdf
 
 
 ## Helpful Repositories
