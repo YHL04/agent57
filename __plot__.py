@@ -11,30 +11,42 @@ data = pd.read_csv(latestfile,
                           "Updates",
                           "Frames",
                           "Loss",
+                          "IntrLoss",
                           "Reward",
+                          "Intrinsic",
                           "Epsilon"]
                    )
 
-plt.subplot(5, 1, 1)
+plt.subplot(7, 1, 1)
 plt.title("Time (Sec)")
 plt.plot(data["Time"])
 
-plt.subplot(5, 1, 2)
+plt.subplot(7, 1, 2)
 plt.title("Updates")
 plt.plot(data["Updates"])
 
-plt.subplot(5, 1, 3)
+plt.subplot(7, 1, 3)
 plt.title("Frames")
 plt.plot(data["Frames"])
 
-plt.subplot(5, 1, 4)
+plt.subplot(7, 1, 4)
 plt.title("Loss (Log scale)")
 plt.yscale("log")
 plt.plot(data["Loss"])
 
-plt.subplot(5, 1, 5)
-plt.title("Normalized Reward")
+plt.subplot(7, 1, 5)
+plt.title("IntrLoss (Log scale)")
+plt.yscale("log")
+plt.plot(data["IntrLoss"])
+
+plt.subplot(7, 1, 6)
+plt.title("Reward")
 plt.plot(data["Reward"])
 plt.plot(data["Reward"].rolling(200).mean())
+
+plt.subplot(7, 1, 7)
+plt.title("Intrinsic Reward")
+plt.plot(data["Intrinsic"])
+plt.plot(data["Intrinsic"].rolling(200).mean())
 
 plt.show()

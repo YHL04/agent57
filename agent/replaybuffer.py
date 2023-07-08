@@ -19,10 +19,11 @@ class Episode:
     obs: np.array
     actions: np.array
     rewards: np.array
-    intrinsic: np.array
+    intrinsics: np.array
     states: np.array
     length: int
     total_reward: float
+    total_intrinsic: float
     total_time: float
 
 
@@ -64,6 +65,7 @@ class ReplayBuffer:
                  block,
                  n_step,
                  gamma,
+                 beta,
                  sample_queue,
                  batch_queue,
                  priority_queue
@@ -75,6 +77,9 @@ class ReplayBuffer:
         self.n_step = n_step
 
         self.gamma = np.full(n_step, gamma)**(np.arange(n_step))
+
+        # Never give up scale
+        self.beta = beta
 
         self.lock = threading.Lock()
         self.sample_queue = sample_queue
@@ -157,6 +162,7 @@ class ReplayBuffer:
             # log
             self.logger.total_frames += episode.length
             self.logger.reward = episode.total_reward
+            self.logger.intrinsic = episode.total_intrinsic
 
     def sample_batch(self):
         """
@@ -173,7 +179,8 @@ class ReplayBuffer:
 
             obs = []
             actions = []
-            rewards = []
+            externals = []
+            intrinsics = []
             states = []
             dones = []
             idxs = []
@@ -183,8 +190,12 @@ class ReplayBuffer:
                 time_idx = random.randrange(0, self.buffer[buffer_idx].length-self.n_step-self.block+1)
                 idxs.append([buffer_idx, time_idx])
 
-                rewards.append([
+                externals.append([
                     self.buffer[buffer_idx].rewards[time_idx+t:time_idx+t+self.n_step]
+                    for t in range(self.block)
+                ])
+                intrinsics.append([
+                    self.buffer[buffer_idx].intrinsics[time_idx+t:time_idx+t+self.n_step]
                     for t in range(self.block)
                 ])
                 obs.append(self.buffer[buffer_idx].obs[time_idx:time_idx+self.block+self.n_step])
@@ -195,7 +206,11 @@ class ReplayBuffer:
 
             obs = torch.tensor(np.stack(obs), dtype=torch.float32) / 255.
             actions = torch.tensor(np.stack(actions), dtype=torch.int32)
-            rewards = torch.tensor(np.sum(np.array(rewards) * self.gamma, axis=2), dtype=torch.float32)
+
+            externals = torch.tensor(np.sum(np.array(externals) * self.gamma, axis=2), dtype=torch.float32)
+            intrinsics = torch.tensor(np.sum(np.array(intrinsics) * self.gamma, axis=2), dtype=torch.float32)
+            rewards = externals + self.beta * intrinsics
+
             states = torch.tensor(np.stack(states), dtype=torch.float32)
             states = (states[:, 0, :], states[:, 1, :])
             dones = torch.tensor(dones, dtype=torch.bool)
@@ -221,7 +236,7 @@ class ReplayBuffer:
 
         return block
 
-    def update_priorities(self, idxs, states, loss, epsilon):
+    def update_priorities(self, idxs, states, loss, intr_loss, epsilon):
         """
         Update recurrent states from new recurrent states obtained during training
         with most up-to-date model weights
@@ -250,6 +265,7 @@ class ReplayBuffer:
             # log
             self.logger.total_updates += 1
             self.logger.loss = loss
+            self.logger.intr_loss = intr_loss
             self.logger.epsilon = epsilon
 
     def log(self):
@@ -291,7 +307,7 @@ class LocalBuffer:
         self.intrinsic_buffer.append(intrinsic)
         self.state_buffer.append(state)
 
-    def finish(self, total_reward, total_time):
+    def finish(self, total_time):
         """
         This function is called after episode ends. lists are
         converted into numpy arrays and lists are cleared for
@@ -309,9 +325,10 @@ class LocalBuffer:
         intrinsics = np.stack(self.intrinsic_buffer).astype(np.float32)
         states = np.stack(self.state_buffer).astype(np.float32)
 
-        rewards = rewards + intrinsics
-
         length = len(obs)
+
+        total_reward = np.sum(rewards).item()
+        total_intrinsic = np.sum(intrinsics).item()
 
         self.obs_buffer.clear()
         self.action_buffer.clear()
@@ -322,8 +339,10 @@ class LocalBuffer:
         return Episode(obs=obs,
                        actions=actions,
                        rewards=rewards,
+                       intrinsics=intrinsics,
                        states=states,
                        length=length,
                        total_reward=total_reward,
+                       total_intrinsic=total_intrinsic,
                        total_time=total_time
                        )

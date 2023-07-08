@@ -63,10 +63,8 @@ class Actor:
         while True:
             obs = self.env.reset()
             state = (np.zeros((1, 512)), np.zeros((1, 512)))
-            action, state = self.get_action(obs, state).wait()
 
             start = time.time()
-            total_reward = 0
             done = False
 
             while not done:
@@ -78,9 +76,7 @@ class Actor:
                 obs = next_obs
                 state = next_state
 
-                total_reward += reward
-
-            episode = self.local_buffer.finish(total_reward, time.time()-start)
+            episode = self.local_buffer.finish(time.time()-start)
             self.return_episode(episode).wait()
 
             if self.id == 1:

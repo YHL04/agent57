@@ -10,9 +10,9 @@ class RunningMeanStd:
     for episodic novelty.
     """
 
-    def __init__(self, shape=()):
-        self.mean = np.zeros(shape, dtype=np.float32)
-        self.var = np.ones(shape, dtype=np.float32)
+    def __init__(self):
+        self.mean = np.zeros((1,), dtype=np.float32)
+        self.var = np.ones((1,), dtype=np.float32)
         self.count = 0
 
         self.deltas = []
@@ -22,14 +22,18 @@ class RunningMeanStd:
         batch_mean = np.mean(x, axis=0)
         batch_var = np.var(x, axis=0)
 
-        # update count and moments
+        # update count
         n = x.shape[0]
         self.count += n
+
+        # update mean
         delta = batch_mean - self.mean
         self.mean += delta * n / self.count
+
+        # update var
         m_a = self.var * (self.count - n)
         m_b = batch_var * n
-        M2 = m_a + m_b + np.square(delta) * self.count * n / self.count
+        M2 = m_a + m_b + np.square(delta) * n
         self.var = M2 / self.count
 
     def update_single(self, x):

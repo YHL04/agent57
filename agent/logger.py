@@ -17,7 +17,9 @@ class Logger:
         self.total_frames = 0
         self.total_updates = 0
         self.loss = 0
+        self.intr_loss = 0
         self.reward = 0
+        self.intrinsic = 0
         self.epsilon = 0
 
         self.start = time.time()
@@ -29,25 +31,32 @@ class Logger:
         elapsed_time = time.time() - self.start
 
         if self.loss != 0:
-            self.file.write('{}, {}, {}, {}, {}, {}\n'.format(elapsed_time,
-                                                              self.total_updates,
-                                                              self.total_frames,
-                                                              self.loss,
-                                                              self.reward,
-                                                              self.epsilon))
+            self.file.write('{}, {}, {}, {}, {}, {}, {}, {}\n'.format(elapsed_time,
+                                                                      self.total_updates,
+                                                                      self.total_frames,
+                                                                      self.loss,
+                                                                      self.intr_loss,
+                                                                      self.reward,
+                                                                      self.intrinsic,
+                                                                      self.epsilon))
             self.file.flush()
 
         print('Elapsed: {:>8.4f} '
               'Updates: {:>8} '
               'Frames: {:>8} '
               'Loss: {:>10.8f} '
+              'IntrLoss: {:>10.8f} '
               'Reward: {:>10.4f} '
+              'Intrinsic: {:>10.4f} '
               'Epsilon: {:>8.3f} '
               .format(elapsed_time,
                       self.total_updates,
                       self.total_frames,
                       self.loss,
+                      self.intr_loss,
                       self.reward,
+                      self.intrinsic,
                       self.epsilon
                       ),
               flush=True)
+

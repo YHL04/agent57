@@ -21,7 +21,7 @@ from copy import deepcopy
 from .actor import Actor
 from .replaybuffer import ReplayBuffer
 
-from models import Model, EmbeddingNet
+from models import SingleModel, EmbeddingNet
 from curiosity import EpisodicNovelty, LifelongNovelty
 
 
@@ -42,11 +42,12 @@ class Learner:
 
     """
     epsilon = 1
-    epsilon_min = 0.2
-    epsilon_decay = 0.00001
+    epsilon_min = 0.1
+    epsilon_decay = 0.0001
 
     lr = 1e-4
     gamma = 0.95
+    beta = 0.2
 
     update_every = 400
     save_every = 100
@@ -72,10 +73,11 @@ class Learner:
 
         # models
         self.action_size = gym.make(env_name).action_space.n
-        model = Model(action_size=self.action_size)
+        model = SingleModel(action_size=self.action_size)
 
-        # episodic novelty module
-        self.episodic_novelty = EpisodicNovelty()
+        # episodic novelty module / lifelong novelty module
+        self.episodic_novelty = EpisodicNovelty(action_size=self.action_size)
+        self.lifelong_novelty = LifelongNovelty()
 
         self.model = nn.DataParallel(deepcopy(model)).cuda()
         self.target_model = nn.DataParallel(deepcopy(model)).cuda()
@@ -117,6 +119,7 @@ class Learner:
                                           block=burnin+rollout,
                                           n_step=n_step,
                                           gamma=self.gamma,
+                                          beta=self.beta,
                                           sample_queue=self.sample_queue,
                                           batch_queue=self.batch_queue,
                                           priority_queue=self.priority_queue
@@ -189,6 +192,10 @@ class Learner:
         self.sample_queue.put(episode)
         self.await_rpc = True
 
+        # Never Give Up
+        with self.lock_model:
+            self.episodic_novelty.reset()
+
         return future
 
     @torch.inference_mode()
@@ -198,7 +205,9 @@ class Learner:
 
         with self.lock_model:
             q_values, state = self.eval_model(obs, state)
-            intrinsic = self.episodic_novelty.get_reward(obs)
+            intr_e = self.episodic_novelty.get_reward(obs)
+            intr_l = self.lifelong_novelty.get_reward(obs)
+            intrinsic = intr_e * intr_l
 
             state = (state[0].detach().cpu().numpy(),
                      state[1].detach().cpu().numpy())
@@ -210,6 +219,9 @@ class Learner:
         return action, state, intrinsic
 
     def get_action(self, obs, state):
+        if state is None:
+            state = (np.zeros((1, 512)), np.zeros((1, 512)))
+
         obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0) / 255.
         state = (torch.tensor(state[0], dtype=torch.float32, device=self.device),
                  torch.tensor(state[1], dtype=torch.float32, device=self.device))
@@ -238,12 +250,12 @@ class Learner:
 
                 # clear self.future1 (answer requests)
                 if self.pending_rpc is not None:
-                    action, state = self.get_action(*self.pending_rpc)
+                    results = self.get_action(*self.pending_rpc)
                     self.pending_rpc = None
 
                     future = self.future1
                     self.future1 = Future()
-                    future.set_result((action, state))
+                    future.set_result(results)
 
     def prepare_data(self):
         """
@@ -296,8 +308,8 @@ class Learner:
                                            states=(states[0].cuda(), states[1].cuda()),
                                            dones=dones.cuda()
                                            )
-        intr_loss = self.train_novelty_step(obs=obs,
-                                            actions=actions
+        intr_loss = self.train_novelty_step(obs=obs.cuda(),
+                                            actions=actions.cuda()
                                             )
 
         # reformat List[Tuple(Tensor, Tensor)] to array of shape (bsz, block_len+n_step, 2, dim)
@@ -307,7 +319,7 @@ class Learner:
         new_states = np.stack([states1, states2], 2)
 
         # update new states to buffer
-        self.priority_queue.put((idxs, new_states, loss, self.epsilon))
+        self.priority_queue.put((idxs, new_states, loss, intr_loss, self.epsilon))
 
         # soft update target model
         if self.updates % self.update_every == 0:
@@ -317,6 +329,7 @@ class Learner:
         with self.lock_model:
             self.hard_update(self.eval_model, self.model)
             self.episodic_novelty.update_eval()
+            self.lifelong_novelty.update_eval()
 
         return loss, intr_loss
 
@@ -391,8 +404,9 @@ class Learner:
 
     def train_novelty_step(self, obs, actions):
         emb_loss = self.train_emb_step(obs, actions)
+        lifelong_loss = self.train_lifelong_step(obs)
 
-        return emb_loss
+        return emb_loss + lifelong_loss
 
     def train_emb_step(self, obs, actions):
         """
@@ -407,6 +421,10 @@ class Learner:
         actions = torch.flatten(actions[:-1, ...], 0, 1)
 
         loss = self.episodic_novelty.update(obs1, obs2, actions)
+        return loss
+
+    def train_lifelong_step(self, obs):
+        loss = self.lifelong_novelty(obs)
         return loss
 
     @staticmethod
