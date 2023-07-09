@@ -47,7 +47,7 @@ class Learner:
 
     lr = 1e-4
     gamma = 0.95
-    beta = 0.2
+    beta = 0.05  # 0.2
 
     update_every = 400
     save_every = 100
@@ -424,7 +424,9 @@ class Learner:
         return loss
 
     def train_lifelong_step(self, obs):
-        loss = self.lifelong_novelty(obs)
+        obs = torch.flatten(obs, 0, 1)
+
+        loss = self.lifelong_novelty.update(obs)
         return loss
 
     @staticmethod

@@ -82,7 +82,7 @@ class EpisodicNovelty:
         # Calculate denominator
         # different from original paper: mean instead of sum so scale is independent of self.N
         similarity = np.sqrt(np.sum(kernel_output)) + self.c_constant
-        print('sim ', similarity)
+        # print('sim ', similarity)
         # if similarity < 1:
         #     print('dst', distance_rate)
 

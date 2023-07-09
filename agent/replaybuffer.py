@@ -7,6 +7,7 @@ import random
 import numpy as np
 from dataclasses import dataclass
 from typing import List
+from collections import deque
 
 from .logger import Logger
 
@@ -86,14 +87,13 @@ class ReplayBuffer:
         self.batch_queue = batch_queue
         self.priority_queue = priority_queue
 
-        self.buffer = np.empty(shape=(buffer_size,), dtype=object)
+        self.buffer = deque()
         self.logger = Logger()
 
-        self.size = 0
-        self.ptr = 0
+        self.frames = 0
 
     def __len__(self):
-        return self.size
+        return len(self.buffer)
 
     def start_threads(self):
         """Wrapper function to start all the threads in ReplayBuffer"""
@@ -123,7 +123,7 @@ class ReplayBuffer:
         while True:
             time.sleep(0.001)
 
-            if not self.batch_queue.full() and self.size != 0:
+            if not self.batch_queue.full() and len(self.buffer) != 0:
                 data = self.sample_batch()
                 self.batch_queue.put(data)
 
@@ -149,15 +149,12 @@ class ReplayBuffer:
         with self.lock:
 
             # add to buffer
-            self.buffer[self.ptr] = episode
+            self.frames += episode.length
+            self.buffer.append(episode)
 
-            # increment size
-            self.size += 1
-            self.size = min(self.size, self.buffer_size)
-
-            # increment pointer
-            self.ptr += 1
-            self.ptr = self.ptr % self.buffer_size
+            while self.frames > self.buffer_size:
+                self.frames -= self.buffer[0].length
+                self.buffer.popleft()
 
             # log
             self.logger.total_frames += episode.length
@@ -186,7 +183,7 @@ class ReplayBuffer:
             idxs = []
 
             for _ in range(self.batch_size):
-                buffer_idx = random.randrange(0, self.size)
+                buffer_idx = random.randrange(0, len(self.buffer))
                 time_idx = random.randrange(0, self.buffer[buffer_idx].length-self.n_step-self.block+1)
                 idxs.append([buffer_idx, time_idx])
 

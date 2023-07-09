@@ -12,19 +12,23 @@ from .runningmeanstd import RunningMeanStd
 
 class LifelongNovelty:
 
-    def __init__(self, lr=5e-4, L=5):
+    def __init__(self,
+                 lr=5e-4,
+                 L=5,
+                 device="cuda"):
 
-        self.predictor = ConvNet()
-        self.target = ConvNet()
+        self.predictor = ConvNet().to(device)
+        self.target = ConvNet().to(device)
 
-        self.eval_predictor = ConvNet()
-        self.eval_target = ConvNet()
+        self.eval_predictor = ConvNet().to(device)
+        self.eval_target = ConvNet().to(device)
 
         self.opt = optim.Adam(self.predictor.parameters(), lr=lr)
 
         self.normalizer = RunningMeanStd()
 
         self.L = L
+        self.device = device
 
     def normalize_reward(self, reward):
         """Compute returns then normalize the intrinsic reward based on these returns"""
@@ -35,12 +39,12 @@ class LifelongNovelty:
         return norm_reward.item()
 
     def get_reward(self, obs):
-        norm_obs = self.normalize_obs(obs)
 
-        pred = self.predictor(norm_obs)
-        target = self.target(norm_obs)
+        # ngu paper normalizes obs but we dont since its already 0-1
+        pred = self.predictor(obs)
+        target = self.target(obs)
 
-        reward = torch.square(pred - target).mean(dim=1).detach().cpu().item()
+        reward = torch.square(pred - target).mean().detach().cpu().item()
         reward = self.normalize_reward(reward)
         reward = min(max(reward, 1), self.L)
 
