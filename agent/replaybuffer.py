@@ -21,7 +21,8 @@ class Episode:
     actions: np.array
     rewards: np.array
     intrinsics: np.array
-    states: np.array
+    states1: np.array
+    states2: np.array
     length: int
     total_reward: float
     total_intrinsic: float
@@ -178,7 +179,8 @@ class ReplayBuffer:
             actions = []
             externals = []
             intrinsics = []
-            states = []
+            states1 = []
+            states2 = []
             dones = []
             idxs = []
 
@@ -197,7 +199,8 @@ class ReplayBuffer:
                 ])
                 obs.append(self.buffer[buffer_idx].obs[time_idx:time_idx+self.block+self.n_step])
                 actions.append(self.buffer[buffer_idx].actions[time_idx:time_idx+self.block+self.n_step])
-                states.append(torch.tensor(self.buffer[buffer_idx].states[time_idx]))
+                states1.append(torch.tensor(self.buffer[buffer_idx].states1[time_idx]))
+                states2.append(torch.tensor(self.buffer[buffer_idx].states2[time_idx]))
                 dones.append(True if time_idx==self.buffer[buffer_idx].length-self.n_step-self.block
                              else False)
 
@@ -208,8 +211,11 @@ class ReplayBuffer:
             intrinsics = torch.tensor(np.sum(np.array(intrinsics) * self.gamma, axis=2), dtype=torch.float32)
             rewards = externals + self.beta * intrinsics
 
-            states = torch.tensor(np.stack(states), dtype=torch.float32)
-            states = (states[:, 0, :], states[:, 1, :])
+            states1 = torch.tensor(np.stack(states1), dtype=torch.float32)
+            states2 = torch.tensor(np.stack(states2), dtype=torch.float32)
+            states1 = (states1[:, 0, :], states1[:, 1, :])
+            states2 = (states2[:, 0, :], states2[:, 1, :])
+
             dones = torch.tensor(dones, dtype=torch.bool)
 
             obs = obs.transpose(0, 1)
@@ -220,20 +226,22 @@ class ReplayBuffer:
             assert obs.shape == (self.block+self.n_step, self.batch_size, 4, 105, 80)
             assert actions.shape == (self.block+self.n_step, self.batch_size, 1)
             assert rewards.shape == (self.block, self.batch_size, 1)
-            assert states[0].shape == (self.batch_size, 512) and states[1].shape == (self.batch_size, 512)
+            assert states1[0].shape == (self.batch_size, 512) and states1[1].shape == (self.batch_size, 512)
+            assert states2[0].shape == (self.batch_size, 512) and states2[1].shape == (self.batch_size, 512)
             assert dones.shape == (self.batch_size, 1)
 
             block = Block(obs=obs,
                           actions=actions,
                           rewards=rewards,
-                          states=states,
+                          states1=states1,
+                          states2=states2,
                           dones=dones,
                           idxs=idxs
                           )
 
         return block
 
-    def update_priorities(self, idxs, states, loss, intr_loss, epsilon):
+    def update_priorities(self, idxs, states1, states2, loss, intr_loss, epsilon):
         """
         Update recurrent states from new recurrent states obtained during training
         with most up-to-date model weights
@@ -246,16 +254,19 @@ class ReplayBuffer:
         epsilon (float): epsilon of Learner for logging purposes
 
         """
-        assert states.shape == (self.batch_size, self.block+self.n_step, 2, 512)
+        assert states1.shape == (self.batch_size, self.block+self.n_step, 2, 512)
+        assert states2.shape == (self.batch_size, self.block+self.n_step, 2, 512)
 
         with self.lock:
 
             # update new state for each sample in batch
-            for idx, state in zip(idxs, states):
+            for idx, state1, state2 in zip(idxs, states1, states2):
                 buffer_idx, time_idx = idx
 
                 try:
-                    self.buffer[buffer_idx].states[time_idx:time_idx+self.block+self.n_step] = state
+                    self.buffer[buffer_idx].states1[time_idx:time_idx+self.block+self.n_step] = state1
+                    self.buffer[buffer_idx].states2[time_idx:time_idx+self.block+self.n_step] = state2
+
                 except ValueError:
                     pass
 
@@ -288,7 +299,7 @@ class LocalBuffer:
         self.intrinsic_buffer = []
         self.state_buffer = []
 
-    def add(self, obs, action, reward, intrinsic, state):
+    def add(self, obs, action, reward, intrinsic, state1, state2):
         """
         This function is called after every time step to store data into list
 
@@ -302,7 +313,8 @@ class LocalBuffer:
         self.action_buffer.append(action)
         self.reward_buffer.append(reward)
         self.intrinsic_buffer.append(intrinsic)
-        self.state_buffer.append(state)
+        self.state1_buffer.append(state1)
+        self.state2_buffer.append(state2)
 
     def finish(self, total_time):
         """
@@ -320,7 +332,8 @@ class LocalBuffer:
         actions = np.stack(self.action_buffer).astype(np.int32)
         rewards = np.stack(self.reward_buffer).astype(np.float32)
         intrinsics = np.stack(self.intrinsic_buffer).astype(np.float32)
-        states = np.stack(self.state_buffer).astype(np.float32)
+        states1 = np.stack(self.state1_buffer).astype(np.float32)
+        states2 = np.stack(self.state2_buffer).astype(np.float32)
 
         length = len(obs)
 
@@ -331,13 +344,15 @@ class LocalBuffer:
         self.action_buffer.clear()
         self.reward_buffer.clear()
         self.intrinsic_buffer.clear()
-        self.state_buffer.clear()
+        self.state1_buffer.clear()
+        self.state2_buffer.clear()
 
         return Episode(obs=obs,
                        actions=actions,
                        rewards=rewards,
                        intrinsics=intrinsics,
-                       states=states,
+                       states1=states1,
+                       states2=states2,
                        length=length,
                        total_reward=total_reward,
                        total_intrinsic=total_intrinsic,

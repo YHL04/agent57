@@ -21,7 +21,7 @@ from copy import deepcopy
 from .actor import Actor
 from .replaybuffer import ReplayBuffer
 
-from models import SingleModel, EmbeddingNet
+from models import Model
 from curiosity import EpisodicNovelty, LifelongNovelty
 
 
@@ -73,7 +73,7 @@ class Learner:
 
         # models
         self.action_size = gym.make(env_name).action_space.n
-        model = SingleModel(action_size=self.action_size)
+        model = Model(action_size=self.action_size)
 
         # episodic novelty module / lifelong novelty module
         self.episodic_novelty = EpisodicNovelty(action_size=self.action_size)
@@ -292,34 +292,41 @@ class Learner:
             self.update(obs=block.obs,
                         actions=block.actions,
                         rewards=block.rewards,
-                        states=block.states,
+                        states1=block.states1,
+                        states2=block.states2,
                         dones=block.dones,
                         idxs=block.idxs
                         )
 
-    def update(self, obs, actions, rewards, states, dones, idxs):
+    def update(self, obs, actions, rewards, states1, states2, dones, idxs):
         """
         An update step. Performs a training step, update new recurrent states,
         soft update target model and transfer weights to eval model
         """
-        loss, new_states = self.train_step(obs=obs.cuda(),
-                                           actions=actions.cuda(),
-                                           rewards=rewards.cuda(),
-                                           states=(states[0].cuda(), states[1].cuda()),
-                                           dones=dones.cuda()
-                                           )
+        loss, new_states1, new_states2 = self.train_step(obs=obs.cuda(),
+                                                         actions=actions.cuda(),
+                                                         rewards=rewards.cuda(),
+                                                         states1=(states1[0].cuda(), states1[1].cuda()),
+                                                         states2=(states2[0].cuda(), states2[1].cuda()),
+                                                         dones=dones.cuda()
+                                                         )
         intr_loss = self.train_novelty_step(obs=obs.cuda(),
                                             actions=actions.cuda()
                                             )
 
         # reformat List[Tuple(Tensor, Tensor)] to array of shape (bsz, block_len+n_step, 2, dim)
-        states1, states2 = zip(*new_states)
-        states1 = torch.stack(states1).transpose(0, 1).cpu().numpy()
-        states2 = torch.stack(states2).transpose(0, 1).cpu().numpy()
-        new_states = np.stack([states1, states2], 2)
+        states11, states12 = zip(*new_states1)
+        states11 = torch.stack(states11).transpose(0, 1).cpu().numpy()
+        states12 = torch.stack(states12).transpose(0, 1).cpu().numpy()
+        new_states1 = np.stack([states11, states12], 2)
+
+        states21, states22 = zip(*new_states2)
+        states21 = torch.stack(states21).transpose(0, 1).cpu().numpy()
+        states22 = torch.stack(states22).transpose(0, 1).cpu().numpy()
+        new_states2 = np.stack([states21, states22], 2)
 
         # update new states to buffer
-        self.priority_queue.put((idxs, new_states, loss, intr_loss, self.epsilon))
+        self.priority_queue.put((idxs, new_states1, new_states2, loss, intr_loss, self.epsilon))
 
         # soft update target model
         if self.updates % self.update_every == 0:
@@ -333,7 +340,7 @@ class Learner:
 
         return loss, intr_loss
 
-    def train_step(self, obs, actions, rewards, states, dones):
+    def train_step(self, obs, actions, rewards, states1, states2, dones):
         """
         Accumulate gradients to increase batch size
         Gradients are cached for n_accumulate steps before optimizer.step()
@@ -349,22 +356,27 @@ class Learner:
         Returns:
         loss (float): Loss of critic model
         bert_loss (float): Loss of bert masked language modeling
-        new_states (float): Generated new states with new weights during training
-
+        new_states1 (float): Generated new states with new weights during training
+        new_states2 (float): Generated new states with new weights during training
         """
 
         with torch.no_grad():
-            state = (states[0].detach().clone(), states[1].detach().clone())
+            state1 = (states1[0].detach().clone(), states1[1].detach().clone())
+            state2 = (states2[0].detach().clone(), states2[1].detach().clone())
 
-            new_states = []
+            new_states1, new_states2 = [], []
             for t in range(self.burnin+self.n_step):
-                new_states.append((state[0].detach(), state[1].detach()))
-                _, state = self.target_model(obs[t], state)
+                new_states1.append((state1[0].detach(), state1[1].detach()))
+                new_states2.append((state2[0].detach(), state2[1].detach()))
+
+                _, state1, state2 = self.target_model(obs[t], state1, state2)
 
             next_q = []
             for t in range(self.burnin+self.n_step, self.block+self.n_step):
-                new_states.append((state[0].detach(), state[1].detach()))
-                next_q_, state = self.target_model(obs[t], state)
+                new_states1.append((state1[0].detach(), state1[1].detach()))
+                new_states2.append((state2[0].detach(), state2[1].detach()))
+
+                next_q_, state1, state2 = self.target_model(obs[t], state1, state2)
                 next_q.append(next_q_)
 
             next_q = torch.stack(next_q)
@@ -380,11 +392,11 @@ class Learner:
 
         self.model.zero_grad()
 
-        state = new_states[self.burnin]
+        state1, state2 = new_states1[self.burnin], new_states2[self.burnin]
         expected = []
         target = []
         for t in range(self.burnin, self.block):
-            expected_, state = self.model(obs[t], state)
+            expected_, state1, state2 = self.model(obs[t], state1, state2)
             expected.append(expected_)
 
             target_ = expected_.detach().clone()
@@ -400,7 +412,7 @@ class Learner:
         self.opt.step()
 
         loss = loss.item()
-        return loss, new_states
+        return loss, new_states1, new_states2
 
     def train_novelty_step(self, obs, actions):
         emb_loss = self.train_emb_step(obs, actions)

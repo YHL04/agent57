@@ -25,7 +25,7 @@ class Actor:
 
         self.local_buffer = LocalBuffer()
 
-    def get_action(self, obs, state):
+    def get_action(self, obs, state1, state2):
         """
         Uses learner RRef and rpc async to call queue_request to get action
         from learner.
@@ -39,7 +39,7 @@ class Actor:
             the learner. It returns action(float) and state(np.array)
 
         """
-        return self.learner_rref.rpc_async().queue_request(obs, state)
+        return self.learner_rref.rpc_async().queue_request(obs, state1, state2)
 
     def return_episode(self, episode):
         """
@@ -62,19 +62,23 @@ class Actor:
 
         while True:
             obs = self.env.reset()
-            state = (np.zeros((1, 512)), np.zeros((1, 512)))
+            state1 = (np.zeros((1, 512)), np.zeros((1, 512)))
+            state2 = (np.zeros((1, 512)), np.zeros((1, 512)))
 
             start = time.time()
             done = False
 
             while not done:
-                action, next_state, intrinsic = self.get_action(obs, state).wait()
+                action, next_state1, next_state2, intrinsic = self.get_action(obs, state1, state2).wait()
                 next_obs, reward, done = self.env.step(action)
 
-                self.local_buffer.add(obs, action, reward, intrinsic, (state[0].squeeze(), state[1].squeeze()))
+                self.local_buffer.add(obs, action, reward, intrinsic,
+                                      (state1[0].squeeze(), state1[1].squeeze()),
+                                      (state2[0].squeeze(), state2[1].squeeze()))
 
                 obs = next_obs
-                state = next_state
+                state1 = next_state1
+                state2 = next_state2
 
             episode = self.local_buffer.finish(time.time()-start)
             self.return_episode(episode).wait()
