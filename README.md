@@ -1,6 +1,10 @@
 # Agent 57
 An unofficial implementation of Agent57 for Atari from DeepMind
 
+## Breakout Test Run
+
+![alt text](https://github.com/YHL04/agent57/main/results/breakout_test_run.png "Plot")
+
 ## Features
 
 - [X] Double Q Network
