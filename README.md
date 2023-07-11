@@ -3,7 +3,7 @@ An unofficial implementation of Agent57 for Atari from DeepMind
 
 ## Breakout Test Run
 
-![alt text](https://github.com/YHL04/agent57/blob/14492cf0ed5bcc8a8c9425437de3a7b4fe977a83/results/breakout_test_run.png "Plot")
+![alt text](https://github.com/YHL04/agent57/blob/14492cf0ed5bcc8a8c9425437de3a7b4fe977a83/results/breakout_test_run.png)
 
 https://github.com/YHL04/agent57/blob/main/results/breakout_test_run.png
 
