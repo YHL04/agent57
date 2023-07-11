@@ -69,7 +69,6 @@ class ReplayBuffer:
                  block,
                  n_step,
                  gamma,
-                 beta,
                  sample_queue,
                  batch_queue,
                  priority_queue
@@ -81,9 +80,6 @@ class ReplayBuffer:
         self.n_step = n_step
 
         self.gamma = np.full(n_step, gamma)**(np.arange(n_step))
-
-        # Never give up scale
-        self.beta = beta
 
         self.lock = threading.Lock()
         self.sample_queue = sample_queue
@@ -264,15 +260,18 @@ class ReplayBuffer:
         with self.lock:
 
             # update new state for each sample in batch
-            for idx, state1, state2 in zip(idxs, states1, states2):
-                buffer_idx, time_idx = idx
-
-                try:
-                    self.buffer[buffer_idx].states1[time_idx:time_idx+self.block+self.n_step] = state1
-                    self.buffer[buffer_idx].states2[time_idx:time_idx+self.block+self.n_step] = state2
-
-                except ValueError:
-                    pass
+            # for idx, state1, state2 in zip(idxs, states1, states2):
+            #     buffer_idx, time_idx = idx
+            #
+            #     try:
+            #         self.buffer[buffer_idx].states1[time_idx:time_idx+self.block+self.n_step] = state1
+            #         self.buffer[buffer_idx].states2[time_idx:time_idx+self.block+self.n_step] = state2
+            #
+            #     except IndexError:
+            #         pass
+            #
+            #     except ValueError:
+            #         pass
 
             # log
             self.logger.total_updates += 1

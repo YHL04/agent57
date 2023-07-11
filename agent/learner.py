@@ -119,7 +119,6 @@ class Learner:
                                           block=burnin+rollout,
                                           n_step=n_step,
                                           gamma=self.gamma,
-                                          beta=self.beta,
                                           sample_queue=self.sample_queue,
                                           batch_queue=self.batch_queue,
                                           priority_queue=self.priority_queue
