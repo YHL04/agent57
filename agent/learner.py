@@ -23,6 +23,7 @@ from .replaybuffer import ReplayBuffer
 
 from models import Model
 from curiosity import EpisodicNovelty, LifelongNovelty
+from utils import compute_retrace_loss, value_rescaling, inverse_value_rescaling
 
 
 class Learner:
@@ -382,8 +383,9 @@ class Learner:
             next_q = torch.stack(next_q)
             next_q = torch.max(next_q, axis=-1, keepdim=True).values.to(torch.float32)
 
-            # calculate next q values
-            next_q = rewards[self.burnin:] + self.gamma * next_q
+            # calculate next q values after inverse value rescaling
+            next_q = rewards[self.burnin:] + self.gamma * inverse_value_rescaling(next_q)
+            next_q = value_rescaling(next_q)
 
             # if done replace next_q with only rewards
             next_q[-1] = torch.where(dones, rewards[-1], next_q[-1])
