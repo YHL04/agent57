@@ -16,6 +16,7 @@ An unofficial implementation of Agent57 for Atari from DeepMind
 - [X] Episodic Novelty Module  
 - [X] Lifelong Novelty Module
 - [X] Separate Nets for extrinsic and intrinsic reward
+- [X] Reward value rescaling
 
 - [ ] Prioritized Experience Replay
 - [ ] Retrace
