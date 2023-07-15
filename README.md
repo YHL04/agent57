@@ -1,6 +1,10 @@
 # Agent 57
 An unofficial implementation of Agent57 for Atari from DeepMind
 
+## Breakout Test Run
+
+<img src="https://github.com/YHL04/agent57/blob/main/results/breakout_test_run.png" alt="drawing" width="600"/>
+
 ## Features
 
 - [X] Double Q Network
@@ -9,10 +13,10 @@ An unofficial implementation of Agent57 for Atari from DeepMind
 - [X] Distributed Architecture (1 Actor)
 - [X] Update new recurrent states after training step
 - [X] LSTM Recurrence
-- [X] Episodic Novelty Module
-      
-- [ ] Lifelong Novelty Module
-- [ ] Separate Nets for extrinsic and intrinsic reward
+- [X] Episodic Novelty Module  
+- [X] Lifelong Novelty Module
+- [X] Separate Nets for extrinsic and intrinsic reward
+
 - [ ] Prioritized Experience Replay
 - [ ] Retrace
 - [ ] Adaptive Exploration with meta-controller

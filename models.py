@@ -61,13 +61,11 @@ class Model(nn.Module):
         self.extr = SingleModel(action_size)
         self.intr = SingleModel(action_size)
 
-    def forward(self, x, state1, state2, beta):
+    def forward(self, x, state1, state2):
         qe, state1 = self.extr(x, state1)
         qi, state2 = self.intr(x, state2)
 
-        q = qe + beta * qi
-
-        return q, state1, state2
+        return qe, qi, state1, state2
 
 
 class EmbeddingNet(nn.Module):

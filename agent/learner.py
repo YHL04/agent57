@@ -23,7 +23,6 @@ from .replaybuffer import ReplayBuffer
 
 from models import Model
 from curiosity import EpisodicNovelty, LifelongNovelty
-from utils import compute_retrace_loss, value_rescaling, inverse_value_rescaling
 
 
 class Learner:
@@ -120,7 +119,6 @@ class Learner:
                                           block=burnin+rollout,
                                           n_step=n_step,
                                           gamma=self.gamma,
-                                          beta=self.beta,
                                           sample_queue=self.sample_queue,
                                           batch_queue=self.batch_queue,
                                           priority_queue=self.priority_queue
@@ -200,35 +198,38 @@ class Learner:
         return future
 
     @torch.inference_mode()
-    def get_policy(self, obs, state):
+    def get_policy(self, obs, state1, state2):
         self.epsilon -= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
 
         with self.lock_model:
-            q_values, state = self.eval_model(obs, state)
+            qe, qi, state1, state2 = self.eval_model(obs, state1, state2)
+            q_values = qe + self.beta * qi
+
             intr_e = self.episodic_novelty.get_reward(obs)
             intr_l = self.lifelong_novelty.get_reward(obs)
-            intrinsic = intr_e * intr_l
+            intr = intr_e * intr_l
 
-            state = (state[0].detach().cpu().numpy(),
-                     state[1].detach().cpu().numpy())
+            state1 = (state1[0].detach().cpu().numpy(),
+                      state1[1].detach().cpu().numpy())
+            state2 = (state2[0].detach().cpu().numpy(),
+                      state2[1].detach().cpu().numpy())
 
         if random.random() <= self.epsilon:
-            return random.randrange(0, self.action_size), state, intrinsic
+            return random.randrange(0, self.action_size), state1, state2, intr
 
         action = torch.argmax(q_values.squeeze()).detach().cpu().squeeze().item()
-        return action, state, intrinsic
+        return action, state1, state2, intr
 
-    def get_action(self, obs, state):
-        if state is None:
-            state = (np.zeros((1, 512)), np.zeros((1, 512)))
-
+    def get_action(self, obs, state1, state2):
         obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0) / 255.
-        state = (torch.tensor(state[0], dtype=torch.float32, device=self.device),
-                 torch.tensor(state[1], dtype=torch.float32, device=self.device))
+        state1 = (torch.tensor(state1[0], dtype=torch.float32, device=self.device),
+                  torch.tensor(state1[1], dtype=torch.float32, device=self.device))
+        state2 = (torch.tensor(state2[0], dtype=torch.float32, device=self.device),
+                  torch.tensor(state2[1], dtype=torch.float32, device=self.device))
 
-        action, state, intrinsic = self.get_policy(obs, state)
-        return action, state, intrinsic
+        action, state1, state2, intr = self.get_policy(obs, state1, state2)
+        return action, state1, state2, intr
 
     def answer_requests(self):
         """
@@ -292,21 +293,23 @@ class Learner:
 
             self.update(obs=block.obs,
                         actions=block.actions,
-                        rewards=block.rewards,
+                        extr=block.extr,
+                        intr=block.intr,
                         states1=block.states1,
                         states2=block.states2,
                         dones=block.dones,
                         idxs=block.idxs
                         )
 
-    def update(self, obs, actions, rewards, states1, states2, dones, idxs):
+    def update(self, obs, actions, extr, intr, states1, states2, dones, idxs):
         """
         An update step. Performs a training step, update new recurrent states,
         soft update target model and transfer weights to eval model
         """
         loss, new_states1, new_states2 = self.train_step(obs=obs.cuda(),
                                                          actions=actions.cuda(),
-                                                         rewards=rewards.cuda(),
+                                                         extr=extr.cuda(),
+                                                         intr=intr.cuda(),
                                                          states1=(states1[0].cuda(), states1[1].cuda()),
                                                          states2=(states2[0].cuda(), states2[1].cuda()),
                                                          dones=dones.cuda()
@@ -341,7 +344,7 @@ class Learner:
 
         return loss, intr_loss
 
-    def train_step(self, obs, actions, rewards, states1, states2, dones):
+    def train_step(self, obs, actions, extr, intr, states1, states2, dones):
         """
         Accumulate gradients to increase batch size
         Gradients are cached for n_accumulate steps before optimizer.step()
@@ -370,45 +373,54 @@ class Learner:
                 new_states1.append((state1[0].detach(), state1[1].detach()))
                 new_states2.append((state2[0].detach(), state2[1].detach()))
 
-                _, state1, state2 = self.target_model(obs[t], state1, state2)
+                _, _, state1, state2 = self.target_model(obs[t], state1, state2)
 
-            next_q = []
+            next_q1, next_q2 = [], []
             for t in range(self.burnin+self.n_step, self.block+self.n_step):
                 new_states1.append((state1[0].detach(), state1[1].detach()))
                 new_states2.append((state2[0].detach(), state2[1].detach()))
 
-                next_q_, state1, state2 = self.target_model(obs[t], state1, state2)
-                next_q.append(next_q_)
+                next_q1_, next_q2_, state1, state2 = self.target_model(obs[t], state1, state2)
+                next_q1.append(next_q1_)
+                next_q2.append(next_q2_)
 
-            next_q = torch.stack(next_q)
-            next_q = torch.max(next_q, axis=-1, keepdim=True).values.to(torch.float32)
+            next_q1 = torch.stack(next_q1)
+            next_q1 = torch.max(next_q1, axis=-1, keepdim=True).values.to(torch.float32)
+            next_q2 = torch.stack(next_q2)
+            next_q2 = torch.max(next_q2, axis=-1, keepdim=True).values.to(torch.float32)
 
-            # calculate next q values after inverse value rescaling
-            next_q = rewards[self.burnin:] + self.gamma * inverse_value_rescaling(next_q)
-            next_q = value_rescaling(next_q)
+            next_q1 = extr[self.burnin:] + self.gamma * next_q1
+            next_q1[-1] = torch.where(dones, extr[-1], next_q1[-1])
+            next_q2 = intr[self.burnin:] + self.gamma * next_q2
+            next_q2[-1] = torch.where(dones, intr[-1], next_q2[-1])
 
-            # if done replace next_q with only rewards
-            next_q[-1] = torch.where(dones, rewards[-1], next_q[-1])
-
-            assert next_q.shape == (self.rollout, self.batch_size, 1)
+            assert next_q1.shape == (self.rollout, self.batch_size, 1)
+            assert next_q2.shape == (self.rollout, self.batch_size, 1)
 
         self.model.zero_grad()
 
         state1, state2 = new_states1[self.burnin], new_states2[self.burnin]
-        expected = []
-        target = []
+        expected1, expected2 = [], []
+        target1, target2 = [], []
         for t in range(self.burnin, self.block):
-            expected_, state1, state2 = self.model(obs[t], state1, state2)
-            expected.append(expected_)
+            expected1_, expected2_, state1, state2 = self.model(obs[t], state1, state2)
+            expected1.append(expected1_)
+            expected2.append(expected2_)
 
-            target_ = expected_.detach().clone()
-            target_[torch.arange(self.batch_size), actions[t].squeeze()] = next_q[t-self.burnin].squeeze()
-            target.append(target_)
+            target1_ = expected1_.detach().clone()
+            target2_ = expected2_.detach().clone()
+            target1_[torch.arange(self.batch_size), actions[t].squeeze()] = next_q1[t-self.burnin].squeeze()
+            target2_[torch.arange(self.batch_size), actions[t].squeeze()] = next_q2[t-self.burnin].squeeze()
+            target1.append(target1_)
+            target2.append(target2_)
 
-        expected = torch.stack(expected)
-        target = torch.stack(target)
-        assert not torch.equal(expected, target)
-        loss = F.huber_loss(expected, target)
+        expected1 = torch.stack(expected1)
+        expected2 = torch.stack(expected2)
+        target1 = torch.stack(target1)
+        target2 = torch.stack(target2)
+
+        loss = F.huber_loss(expected1, target1) + F.huber_loss(expected2, target2)
+
         self.opt.zero_grad()
         loss.backward()
         self.opt.step()

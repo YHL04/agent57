@@ -19,13 +19,13 @@ class Episode:
     """
     obs: np.array
     actions: np.array
-    rewards: np.array
-    intrinsics: np.array
+    extr: np.array
+    intr: np.array
     states1: np.array
     states2: np.array
     length: int
-    total_reward: float
-    total_intrinsic: float
+    total_extr: float
+    total_intr: float
     total_time: float
 
 
@@ -36,8 +36,10 @@ class Block:
     """
     obs: torch.tensor
     actions: torch.tensor
-    rewards: torch.tensor
-    states: torch.tensor
+    extr: torch.tensor
+    intr: torch.tensor
+    states1: torch.tensor
+    states2: torch.tensor
     dones: torch.tensor
     idxs: List[List[int]]
 
@@ -67,7 +69,6 @@ class ReplayBuffer:
                  block,
                  n_step,
                  gamma,
-                 beta,
                  sample_queue,
                  batch_queue,
                  priority_queue
@@ -79,9 +80,6 @@ class ReplayBuffer:
         self.n_step = n_step
 
         self.gamma = np.full(n_step, gamma)**(np.arange(n_step))
-
-        # Never give up scale
-        self.beta = beta
 
         self.lock = threading.Lock()
         self.sample_queue = sample_queue
@@ -159,8 +157,8 @@ class ReplayBuffer:
 
             # log
             self.logger.total_frames += episode.length
-            self.logger.reward = episode.total_reward
-            self.logger.intrinsic = episode.total_intrinsic
+            self.logger.reward = episode.total_extr
+            self.logger.intrinsic = episode.total_intr
 
     def sample_batch(self):
         """
@@ -177,8 +175,8 @@ class ReplayBuffer:
 
             obs = []
             actions = []
-            externals = []
-            intrinsics = []
+            extr = []
+            intr = []
             states1 = []
             states2 = []
             dones = []
@@ -189,12 +187,12 @@ class ReplayBuffer:
                 time_idx = random.randrange(0, self.buffer[buffer_idx].length-self.n_step-self.block+1)
                 idxs.append([buffer_idx, time_idx])
 
-                externals.append([
-                    self.buffer[buffer_idx].rewards[time_idx+t:time_idx+t+self.n_step]
+                extr.append([
+                    self.buffer[buffer_idx].extr[time_idx+t:time_idx+t+self.n_step]
                     for t in range(self.block)
                 ])
-                intrinsics.append([
-                    self.buffer[buffer_idx].intrinsics[time_idx+t:time_idx+t+self.n_step]
+                intr.append([
+                    self.buffer[buffer_idx].intr[time_idx+t:time_idx+t+self.n_step]
                     for t in range(self.block)
                 ])
                 obs.append(self.buffer[buffer_idx].obs[time_idx:time_idx+self.block+self.n_step])
@@ -207,9 +205,8 @@ class ReplayBuffer:
             obs = torch.tensor(np.stack(obs), dtype=torch.float32) / 255.
             actions = torch.tensor(np.stack(actions), dtype=torch.int32)
 
-            externals = torch.tensor(np.sum(np.array(externals) * self.gamma, axis=2), dtype=torch.float32)
-            intrinsics = torch.tensor(np.sum(np.array(intrinsics) * self.gamma, axis=2), dtype=torch.float32)
-            rewards = externals + self.beta * intrinsics
+            extr = torch.tensor(np.sum(np.array(extr) * self.gamma, axis=2), dtype=torch.float32)
+            intr = torch.tensor(np.sum(np.array(intr) * self.gamma, axis=2), dtype=torch.float32)
 
             states1 = torch.tensor(np.stack(states1), dtype=torch.float32)
             states2 = torch.tensor(np.stack(states2), dtype=torch.float32)
@@ -220,19 +217,22 @@ class ReplayBuffer:
 
             obs = obs.transpose(0, 1)
             actions = actions.transpose(0, 1).unsqueeze(-1)
-            rewards = rewards.transpose(0, 1).unsqueeze(-1)
+            extr = extr.transpose(0, 1).unsqueeze(-1)
+            intr = intr.transpose(0, 1).unsqueeze(-1)
             dones = dones.unsqueeze(-1)
 
             assert obs.shape == (self.block+self.n_step, self.batch_size, 4, 105, 80)
             assert actions.shape == (self.block+self.n_step, self.batch_size, 1)
-            assert rewards.shape == (self.block, self.batch_size, 1)
+            assert extr.shape == (self.block, self.batch_size, 1)
+            assert intr.shape == (self.block, self.batch_size, 1)
             assert states1[0].shape == (self.batch_size, 512) and states1[1].shape == (self.batch_size, 512)
             assert states2[0].shape == (self.batch_size, 512) and states2[1].shape == (self.batch_size, 512)
             assert dones.shape == (self.batch_size, 1)
 
             block = Block(obs=obs,
                           actions=actions,
-                          rewards=rewards,
+                          extr=extr,
+                          intr=intr,
                           states1=states1,
                           states2=states2,
                           dones=dones,
@@ -260,15 +260,18 @@ class ReplayBuffer:
         with self.lock:
 
             # update new state for each sample in batch
-            for idx, state1, state2 in zip(idxs, states1, states2):
-                buffer_idx, time_idx = idx
-
-                try:
-                    self.buffer[buffer_idx].states1[time_idx:time_idx+self.block+self.n_step] = state1
-                    self.buffer[buffer_idx].states2[time_idx:time_idx+self.block+self.n_step] = state2
-
-                except ValueError:
-                    pass
+            # for idx, state1, state2 in zip(idxs, states1, states2):
+            #     buffer_idx, time_idx = idx
+            #
+            #     try:
+            #         self.buffer[buffer_idx].states1[time_idx:time_idx+self.block+self.n_step] = state1
+            #         self.buffer[buffer_idx].states2[time_idx:time_idx+self.block+self.n_step] = state2
+            #
+            #     except IndexError:
+            #         pass
+            #
+            #     except ValueError:
+            #         pass
 
             # log
             self.logger.total_updates += 1
@@ -295,11 +298,12 @@ class LocalBuffer:
     def __init__(self):
         self.obs_buffer = []
         self.action_buffer = []
-        self.reward_buffer = []
-        self.intrinsic_buffer = []
-        self.state_buffer = []
+        self.extr_buffer = []
+        self.intr_buffer = []
+        self.state1_buffer = []
+        self.state2_buffer = []
 
-    def add(self, obs, action, reward, intrinsic, state1, state2):
+    def add(self, obs, action, extr, intr, state1, state2):
         """
         This function is called after every time step to store data into list
 
@@ -311,8 +315,8 @@ class LocalBuffer:
         """
         self.obs_buffer.append(obs)
         self.action_buffer.append(action)
-        self.reward_buffer.append(reward)
-        self.intrinsic_buffer.append(intrinsic)
+        self.extr_buffer.append(extr)
+        self.intr_buffer.append(intr)
         self.state1_buffer.append(state1)
         self.state2_buffer.append(state2)
 
@@ -330,31 +334,31 @@ class LocalBuffer:
         """
         obs = np.stack(self.obs_buffer).astype(np.uint8)
         actions = np.stack(self.action_buffer).astype(np.int32)
-        rewards = np.stack(self.reward_buffer).astype(np.float32)
-        intrinsics = np.stack(self.intrinsic_buffer).astype(np.float32)
+        extr = np.stack(self.extr_buffer).astype(np.float32)
+        intr = np.stack(self.intr_buffer).astype(np.float32)
         states1 = np.stack(self.state1_buffer).astype(np.float32)
         states2 = np.stack(self.state2_buffer).astype(np.float32)
 
         length = len(obs)
 
-        total_reward = np.sum(rewards).item()
-        total_intrinsic = np.sum(intrinsics).item()
+        total_extr = np.sum(extr).item()
+        total_intr = np.sum(intr).item()
 
         self.obs_buffer.clear()
         self.action_buffer.clear()
-        self.reward_buffer.clear()
-        self.intrinsic_buffer.clear()
+        self.extr_buffer.clear()
+        self.intr_buffer.clear()
         self.state1_buffer.clear()
         self.state2_buffer.clear()
 
         return Episode(obs=obs,
                        actions=actions,
-                       rewards=rewards,
-                       intrinsics=intrinsics,
+                       extr=extr,
+                       intr=intr,
                        states1=states1,
                        states2=states2,
                        length=length,
-                       total_reward=total_reward,
-                       total_intrinsic=total_intrinsic,
+                       total_extr=total_extr,
+                       total_intr=total_intr,
                        total_time=total_time
                        )
