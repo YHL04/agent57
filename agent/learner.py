@@ -60,7 +60,6 @@ class Learner:
                  batch_size,
                  n_cos,
                  n_tau,
-                 n_step,
                  burnin,
                  rollout
                  ):
@@ -97,8 +96,6 @@ class Learner:
         self.burnin = burnin
         self.rollout = rollout
         self.block = burnin + rollout
-        self.n_step = n_step
-        self.gamma = self.gamma ** n_step
 
         # optimizer and loss functions
         self.opt = optim.Adam(self.model.parameters(), lr=self.lr)
@@ -386,19 +383,19 @@ class Learner:
                 next_q2.append(next_q2_)
 
             next_q1 = torch.stack(next_q1)
-            next_q1 = torch.max(next_q1, axis=-1, keepdim=True).values.to(torch.float32)
+            # next_q1 = torch.max(next_q1, axis=-1, keepdim=True).values.to(torch.float32)
             next_q2 = torch.stack(next_q2)
-            next_q2 = torch.max(next_q2, axis=-1, keepdim=True).values.to(torch.float32)
+            # next_q2 = torch.max(next_q2, axis=-1, keepdim=True).values.to(torch.float32)
 
-            next_q1 = extr[self.burnin:] + self.gamma * inverse_value_rescaling(next_q1)
-            next_q1 = value_rescaling(next_q1)
-            next_q1[-1] = torch.where(dones, extr[-1], next_q1[-1])
-            next_q2 = intr[self.burnin:] + self.gamma * inverse_value_rescaling(next_q2)
-            next_q2 = value_rescaling(next_q2)
-            next_q2[-1] = torch.where(dones, intr[-1], next_q2[-1])
-
-            assert next_q1.shape == (self.rollout, self.batch_size, 1)
-            assert next_q2.shape == (self.rollout, self.batch_size, 1)
+            # next_q1 = extr[self.burnin:] + self.gamma * inverse_value_rescaling(next_q1)
+            # next_q1 = value_rescaling(next_q1)
+            # next_q1[-1] = torch.where(dones, extr[-1], next_q1[-1])
+            # next_q2 = intr[self.burnin:] + self.gamma * inverse_value_rescaling(next_q2)
+            # next_q2 = value_rescaling(next_q2)
+            # next_q2[-1] = torch.where(dones, intr[-1], next_q2[-1])
+            #
+            # assert next_q1.shape == (self.rollout, self.batch_size, 1)
+            # assert next_q2.shape == (self.rollout, self.batch_size, 1)
 
         self.model.zero_grad()
 
@@ -422,7 +419,23 @@ class Learner:
         target1 = torch.stack(target1)
         target2 = torch.stack(target2)
 
-        loss = F.huber_loss(expected1, target1) + F.huber_loss(expected2, target2)
+        # loss = F.huber_loss(expected1, target1) + F.huber_loss(expected2, target2)
+        loss = compute_retrace_loss(q_t=,
+                                    q_t1=,
+                                    a_t=,
+                                    a_t1=,
+                                    r_t=,
+                                    pi_t=,
+                                    mu_t=,
+                                    discount_t=) + \
+               compute_retrace_loss(q_t=,
+                                    q_t1=,
+                                    a_t=,
+                                    a_t1=,
+                                    r_t=,
+                                    pi_t=,
+                                    mu_t=,
+                                    discount_t=)
 
         self.opt.zero_grad()
         loss.backward()

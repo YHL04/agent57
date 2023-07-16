@@ -55,7 +55,6 @@ class ReplayBuffer:
     batch_size (int): Training batch size
     block (int): Time step length of blocks
     d_model (int): Dimension of model
-    n_step (int): N step returns
     gamma (float): gamma constant for next q in q learning
     sample_queue (mp.Queue): FIFO queue to store Episode into ReplayBuffer
     batch_queue (mp.Queue): FIFO queue to sample batches for training from ReplayBuffer
@@ -67,7 +66,6 @@ class ReplayBuffer:
                  buffer_size,
                  batch_size,
                  block,
-                 n_step,
                  gamma,
                  sample_queue,
                  batch_queue,
@@ -77,9 +75,8 @@ class ReplayBuffer:
         self.buffer_size = buffer_size
         self.batch_size = batch_size
         self.block = block
-        self.n_step = n_step
 
-        self.gamma = np.full(n_step, gamma)**(np.arange(n_step))
+        self.gamma = gamma
 
         self.lock = threading.Lock()
         self.sample_queue = sample_queue
@@ -184,23 +181,16 @@ class ReplayBuffer:
 
             for _ in range(self.batch_size):
                 buffer_idx = random.randrange(0, len(self.buffer))
-                time_idx = random.randrange(0, self.buffer[buffer_idx].length-self.n_step-self.block+1)
+                time_idx = random.randrange(0, self.buffer[buffer_idx].length-self.block)
                 idxs.append([buffer_idx, time_idx])
 
-                extr.append([
-                    self.buffer[buffer_idx].extr[time_idx+t:time_idx+t+self.n_step]
-                    for t in range(self.block)
-                ])
-                intr.append([
-                    self.buffer[buffer_idx].intr[time_idx+t:time_idx+t+self.n_step]
-                    for t in range(self.block)
-                ])
-                obs.append(self.buffer[buffer_idx].obs[time_idx:time_idx+self.block+self.n_step])
-                actions.append(self.buffer[buffer_idx].actions[time_idx:time_idx+self.block+self.n_step])
+                extr.append(self.buffer[buffer_idx].extr[time_idx:time_idx+self.block])
+                intr.append(self.buffer[buffer_idx].intr[time_idx:time_idx+self.block])
+                obs.append(self.buffer[buffer_idx].obs[time_idx:time_idx+self.block+1])
+                actions.append(self.buffer[buffer_idx].actions[time_idx:time_idx+self.block+1])
                 states1.append(torch.tensor(self.buffer[buffer_idx].states1[time_idx]))
                 states2.append(torch.tensor(self.buffer[buffer_idx].states2[time_idx]))
-                dones.append(True if time_idx==self.buffer[buffer_idx].length-self.n_step-self.block
-                             else False)
+                dones.append(True if time_idx==self.buffer[buffer_idx].length-1-self.block else False)
 
             obs = torch.tensor(np.stack(obs), dtype=torch.float32) / 255.
             actions = torch.tensor(np.stack(actions), dtype=torch.int32)
@@ -221,8 +211,8 @@ class ReplayBuffer:
             intr = intr.transpose(0, 1).unsqueeze(-1)
             dones = dones.unsqueeze(-1)
 
-            assert obs.shape == (self.block+self.n_step, self.batch_size, 4, 105, 80)
-            assert actions.shape == (self.block+self.n_step, self.batch_size, 1)
+            assert obs.shape == (self.block+1, self.batch_size, 4, 105, 80)
+            assert actions.shape == (self.block+1, self.batch_size, 1)
             assert extr.shape == (self.block, self.batch_size, 1)
             assert intr.shape == (self.block, self.batch_size, 1)
             assert states1[0].shape == (self.batch_size, 512) and states1[1].shape == (self.batch_size, 512)
@@ -248,14 +238,14 @@ class ReplayBuffer:
 
         Parameters:
         idxs (List[List[buffer_idx, time_idx]]): indices of states
-        states (Array[batch_size, block+n_step, 2, dim]): new recurrent states
+        states (Array[batch_size, block+1, 2, dim]): new recurrent states
         loss (float): critic loss
         bert_loss (float): bert loss
         epsilon (float): epsilon of Learner for logging purposes
 
         """
-        assert states1.shape == (self.batch_size, self.block+self.n_step, 2, 512)
-        assert states2.shape == (self.batch_size, self.block+self.n_step, 2, 512)
+        assert states1.shape == (self.batch_size, self.block+1, 2, 512)
+        assert states2.shape == (self.batch_size, self.block+1, 2, 512)
 
         with self.lock:
 
@@ -264,8 +254,8 @@ class ReplayBuffer:
             #     buffer_idx, time_idx = idx
             #
             #     try:
-            #         self.buffer[buffer_idx].states1[time_idx:time_idx+self.block+self.n_step] = state1
-            #         self.buffer[buffer_idx].states2[time_idx:time_idx+self.block+self.n_step] = state2
+            #         self.buffer[buffer_idx].states1[time_idx:time_idx+self.block+1] = state1
+            #         self.buffer[buffer_idx].states2[time_idx:time_idx+self.block+1] = state2
             #
             #     except IndexError:
             #         pass

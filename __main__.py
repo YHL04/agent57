@@ -16,7 +16,6 @@ def run_worker(rank,
                batch_size,
                burnin,
                rollout,
-               n_step,
                n_cos,
                n_tau
                ):
@@ -47,7 +46,6 @@ def run_worker(rank,
                   batch_size,
                   n_cos,
                   n_tau,
-                  n_step,
                   burnin,
                   rollout
                   ),
@@ -71,7 +69,6 @@ def main(env_name,
          batch_size,
          burnin,
          rollout,
-         n_step,
          n_cos,
          n_tau
          ):
@@ -86,7 +83,6 @@ def main(env_name,
               batch_size,
               burnin,
               rollout,
-              n_step,
               n_cos,
               n_tau
               ),
@@ -101,7 +97,6 @@ if __name__ == "__main__":
          batch_size=64,
          burnin=0,
          rollout=10,
-         n_step=10,
          n_cos=64,
          n_tau=64
          )
