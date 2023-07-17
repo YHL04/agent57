@@ -406,8 +406,8 @@ class Learner:
         q1 = torch.stack(q1)
         q2 = torch.stack(q2)
 
-        pi_t1 = F.softmax(q1, dim=-1)
-        pi_t2 = F.softmax(q2, dim=-1)
+        pi_t1 = F.softmax(inverse_value_rescaling(q1), dim=-1)
+        pi_t2 = F.softmax(inverse_value_rescaling(q2), dim=-1)
 
         # pointless?
         discount_t = (~dones).float() * self.discount
