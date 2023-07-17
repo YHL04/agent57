@@ -47,7 +47,7 @@ class Learner:
     epsilon_decay = 0.0001
 
     lr = 1e-4
-    gamma = 0.95
+    discount = 0.95
     beta = 0.05  # 0.2
 
     update_every = 400
@@ -115,8 +115,7 @@ class Learner:
         self.replay_buffer = ReplayBuffer(buffer_size=buffer_size,
                                           batch_size=batch_size,
                                           block=burnin+rollout,
-                                          n_step=n_step,
-                                          gamma=self.gamma,
+                                          discount=self.discount,
                                           sample_queue=self.sample_queue,
                                           batch_queue=self.batch_queue,
                                           priority_queue=self.priority_queue
@@ -202,7 +201,7 @@ class Learner:
 
         with self.lock_model:
             qe, qi, state1, state2 = self.eval_model(obs, state1, state2)
-            q_values = qe + self.beta * qi
+            q_values = inverse_value_rescaling(qe) + self.beta * inverse_value_rescaling(qi)
 
             intr_e = self.episodic_novelty.get_reward(obs)
             intr_l = self.lifelong_novelty.get_reward(obs)
@@ -214,10 +213,16 @@ class Learner:
                       state2[1].detach().cpu().numpy())
 
         if random.random() <= self.epsilon:
-            return random.randrange(0, self.action_size), state1, state2, intr
+            action = random.randrange(0, self.action_size)
+            prob = self.epsilon / self.action_size
 
+            return action, prob, state1, state2, intr
+
+        # get action and probability of that action according to Agent57 (pg 19)
         action = torch.argmax(q_values.squeeze()).detach().cpu().squeeze().item()
-        return action, state1, state2, intr
+        prob = 1 - (self.epsilon * ((self.action_size - 1) / self.action_size))
+
+        return action, prob, state1, state2, intr
 
     def get_action(self, obs, state1, state2):
         obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0) / 255.
@@ -291,6 +296,7 @@ class Learner:
 
             self.update(obs=block.obs,
                         actions=block.actions,
+                        probs=block.probs,
                         extr=block.extr,
                         intr=block.intr,
                         states1=block.states1,
@@ -299,22 +305,25 @@ class Learner:
                         idxs=block.idxs
                         )
 
-    def update(self, obs, actions, extr, intr, states1, states2, dones, idxs):
+    def update(self, obs, actions, probs, extr, intr, states1, states2, dones, idxs):
         """
         An update step. Performs a training step, update new recurrent states,
         soft update target model and transfer weights to eval model
         """
-        loss, new_states1, new_states2 = self.train_step(obs=obs.cuda(),
-                                                         actions=actions.cuda(),
-                                                         extr=extr.cuda(),
-                                                         intr=intr.cuda(),
-                                                         states1=(states1[0].cuda(), states1[1].cuda()),
-                                                         states2=(states2[0].cuda(), states2[1].cuda()),
-                                                         dones=dones.cuda()
-                                                         )
-        intr_loss = self.train_novelty_step(obs=obs.cuda(),
-                                            actions=actions.cuda()
-                                            )
+        loss, new_states1, new_states2 = self.train_step(
+            obs=obs.cuda(),
+            actions=actions.cuda(),
+            probs=probs.cuda(),
+            extr=extr.cuda(),
+            intr=intr.cuda(),
+            states1=(states1[0].cuda(), states1[1].cuda()),
+            states2=(states2[0].cuda(), states2[1].cuda()),
+            dones=dones.cuda()
+        )
+        intr_loss = self.train_novelty_step(
+            obs=obs.cuda(),
+            actions=actions.cuda()
+        )
 
         # reformat List[Tuple(Tensor, Tensor)] to array of shape (bsz, block_len+n_step, 2, dim)
         states11, states12 = zip(*new_states1)
@@ -342,24 +351,26 @@ class Learner:
 
         return loss, intr_loss
 
-    def train_step(self, obs, actions, extr, intr, states1, states2, dones):
+    def train_step(self, obs, actions, probs, extr, intr, states1, states2, dones):
         """
         Accumulate gradients to increase batch size
         Gradients are cached for n_accumulate steps before optimizer.step()
 
-        Parameters:
-        allocs (Tensor[block+n_step, batch_size*n_accumulate, 1]): allocation values
-        ids (Tensor[block+n_step, batch_size*n_accumulate, max_len]): tokens
-        actions (Tensor[block+n_step, batch_size*n_accumulate, 1, 1]): recorded actions
-        rewards (Tensor[block, batch_size*n_accumulate, 1]): recorded rewards
-        bert_targets (Tensor[block+n_step, batch_size*n_accumulate, 1]): bert targets
-        states (Tensor[batch_size*n_accumulate, state_len, d_model]): recorded recurrent states
+        Args:
+            obs (block+1, batch_size, channels, h, w]): tokens
+            actions (block+1, batch_size): actions
+            probs (block+1, batch_size): probs
+            extr (block, batch_size): extrinsic rewards
+            intr (block, batch_size): extrinsic rewards
+            states1 (batch_size, dim): recurrent states
+            states2 (batch_size, dim): recurrent states
+            dones (block+1, batch_size): boolean indicating episode termination
 
         Returns:
-        loss (float): Loss of critic model
-        bert_loss (float): Loss of bert masked language modeling
-        new_states1 (float): Generated new states with new weights during training
-        new_states2 (float): Generated new states with new weights during training
+            loss (float): Loss of critic model
+            bert_loss (float): Loss of bert masked language modeling
+            new_states1 (batch_size, dim): for lstm
+            new_states2 (batch_size, dim): for lstm
         """
 
         with torch.no_grad():
@@ -383,59 +394,48 @@ class Learner:
                 next_q2.append(next_q2_)
 
             next_q1 = torch.stack(next_q1)
-            # next_q1 = torch.max(next_q1, axis=-1, keepdim=True).values.to(torch.float32)
             next_q2 = torch.stack(next_q2)
-            # next_q2 = torch.max(next_q2, axis=-1, keepdim=True).values.to(torch.float32)
-
-            # next_q1 = extr[self.burnin:] + self.gamma * inverse_value_rescaling(next_q1)
-            # next_q1 = value_rescaling(next_q1)
-            # next_q1[-1] = torch.where(dones, extr[-1], next_q1[-1])
-            # next_q2 = intr[self.burnin:] + self.gamma * inverse_value_rescaling(next_q2)
-            # next_q2 = value_rescaling(next_q2)
-            # next_q2[-1] = torch.where(dones, intr[-1], next_q2[-1])
-            #
-            # assert next_q1.shape == (self.rollout, self.batch_size, 1)
-            # assert next_q2.shape == (self.rollout, self.batch_size, 1)
 
         self.model.zero_grad()
 
         state1, state2 = new_states1[self.burnin], new_states2[self.burnin]
-        expected1, expected2 = [], []
-        target1, target2 = [], []
+        q1, q2 = [], []
         for t in range(self.burnin, self.block):
-            expected1_, expected2_, state1, state2 = self.model(obs[t], state1, state2)
-            expected1.append(expected1_)
-            expected2.append(expected2_)
+            q1_, q2_, state1, state2 = self.model(obs[t], state1, state2)
+            q1.append(q1_)
+            q2.append(q2_)
 
-            target1_ = expected1_.detach().clone()
-            target2_ = expected2_.detach().clone()
-            target1_[torch.arange(self.batch_size), actions[t].squeeze()] = next_q1[t-self.burnin].squeeze()
-            target2_[torch.arange(self.batch_size), actions[t].squeeze()] = next_q2[t-self.burnin].squeeze()
-            target1.append(target1_)
-            target2.append(target2_)
+        q1 = torch.stack(q1)
+        q2 = torch.stack(q2)
 
-        expected1 = torch.stack(expected1)
-        expected2 = torch.stack(expected2)
-        target1 = torch.stack(target1)
-        target2 = torch.stack(target2)
+        pi_t1 = F.softmax(q1, dim=-1)
+        pi_t2 = F.softmax(q2, dim=-1)
 
-        # loss = F.huber_loss(expected1, target1) + F.huber_loss(expected2, target2)
-        loss = compute_retrace_loss(q_t=,
-                                    q_t1=,
-                                    a_t=,
-                                    a_t1=,
-                                    r_t=,
-                                    pi_t=,
-                                    mu_t=,
-                                    discount_t=) + \
-               compute_retrace_loss(q_t=,
-                                    q_t1=,
-                                    a_t=,
-                                    a_t1=,
-                                    r_t=,
-                                    pi_t=,
-                                    mu_t=,
-                                    discount_t=)
+        # pointless?
+        discount_t = (~dones).float() * self.discount
+
+        extr_loss = compute_retrace_loss(
+            q_t=q1,
+            q_t1=next_q1,
+            a_t=actions[:-1],
+            a_t1=actions[1:],
+            r_t=extr,
+            pi_t1=pi_t1,
+            mu_t1=probs[1:],
+            discount_t1=discount_t[:-1]
+        )
+        intr_loss = compute_retrace_loss(
+            q_t=q2,
+            q_t1=next_q2,
+            a_t=actions[:-1],
+            a_t1=actions[1:],
+            r_t=intr,
+            pi_t1=pi_t2,
+            mu_t1=probs[1:],
+            discount_t1=discount_t[:-1]
+        )
+
+        loss = extr_loss + intr_loss
 
         self.opt.zero_grad()
         loss.backward()
@@ -453,8 +453,8 @@ class Learner:
     def train_emb_step(self, obs, actions):
         """
         Args:
-            obs (torch.Tensor): shape (block+n_step, bsz, 4, 105, 80)
-            actions (torch.Tensor): shape (block+n_step, bsz, 1)
+            obs (torch.Tensor): shape (block+1, bsz, 4, 105, 80)
+            actions (torch.Tensor): shape (block+1, bsz, 1)
         """
 
         # Get obs, next_obs and action, and flatten time and batch dimension

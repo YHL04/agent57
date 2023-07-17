@@ -19,10 +19,12 @@ class Episode:
     """
     obs: np.array
     actions: np.array
+    probs: np.array
     extr: np.array
     intr: np.array
     states1: np.array
     states2: np.array
+    dones: np.array
     length: int
     total_extr: float
     total_intr: float
@@ -36,6 +38,7 @@ class Block:
     """
     obs: torch.tensor
     actions: torch.tensor
+    probs: torch.tensor
     extr: torch.tensor
     intr: torch.tensor
     states1: torch.tensor
@@ -55,7 +58,7 @@ class ReplayBuffer:
     batch_size (int): Training batch size
     block (int): Time step length of blocks
     d_model (int): Dimension of model
-    gamma (float): gamma constant for next q in q learning
+    discount (float): gamma constant for next q in q learning
     sample_queue (mp.Queue): FIFO queue to store Episode into ReplayBuffer
     batch_queue (mp.Queue): FIFO queue to sample batches for training from ReplayBuffer
     priority_queue (mp.Queue): FIFO queue to update new recurrent states from training to ReplayBuffer
@@ -66,7 +69,7 @@ class ReplayBuffer:
                  buffer_size,
                  batch_size,
                  block,
-                 gamma,
+                 discount,
                  sample_queue,
                  batch_queue,
                  priority_queue
@@ -76,7 +79,7 @@ class ReplayBuffer:
         self.batch_size = batch_size
         self.block = block
 
-        self.gamma = gamma
+        self.discount = discount
 
         self.lock = threading.Lock()
         self.sample_queue = sample_queue
@@ -172,6 +175,7 @@ class ReplayBuffer:
 
             obs = []
             actions = []
+            probs = []
             extr = []
             intr = []
             states1 = []
@@ -188,15 +192,17 @@ class ReplayBuffer:
                 intr.append(self.buffer[buffer_idx].intr[time_idx:time_idx+self.block])
                 obs.append(self.buffer[buffer_idx].obs[time_idx:time_idx+self.block+1])
                 actions.append(self.buffer[buffer_idx].actions[time_idx:time_idx+self.block+1])
+                probs.append(self.buffer[buffer_idx].probs[time_idx:time_idx+self.block+1])
                 states1.append(torch.tensor(self.buffer[buffer_idx].states1[time_idx]))
                 states2.append(torch.tensor(self.buffer[buffer_idx].states2[time_idx]))
-                dones.append(True if time_idx==self.buffer[buffer_idx].length-1-self.block else False)
+                dones.append(torch.tensor(self.buffer[buffer_idx].dones[time_idx:time_idx+self.block+1]))
 
             obs = torch.tensor(np.stack(obs), dtype=torch.float32) / 255.
             actions = torch.tensor(np.stack(actions), dtype=torch.int32)
+            probs = torch.tensor(np.stack(probs), dtype=torch.float32)
 
-            extr = torch.tensor(np.sum(np.array(extr) * self.gamma, axis=2), dtype=torch.float32)
-            intr = torch.tensor(np.sum(np.array(intr) * self.gamma, axis=2), dtype=torch.float32)
+            extr = torch.tensor(extr, dtype=torch.float32)
+            intr = torch.tensor(intr, dtype=torch.float32)
 
             states1 = torch.tensor(np.stack(states1), dtype=torch.float32)
             states2 = torch.tensor(np.stack(states2), dtype=torch.float32)
@@ -206,21 +212,22 @@ class ReplayBuffer:
             dones = torch.tensor(dones, dtype=torch.bool)
 
             obs = obs.transpose(0, 1)
-            actions = actions.transpose(0, 1).unsqueeze(-1)
-            extr = extr.transpose(0, 1).unsqueeze(-1)
-            intr = intr.transpose(0, 1).unsqueeze(-1)
-            dones = dones.unsqueeze(-1)
+            actions = actions.transpose(0, 1)
+            probs = probs.transpose(0, 1)
+            extr = extr.transpose(0, 1)
+            intr = intr.transpose(0, 1)
 
             assert obs.shape == (self.block+1, self.batch_size, 4, 105, 80)
-            assert actions.shape == (self.block+1, self.batch_size, 1)
-            assert extr.shape == (self.block, self.batch_size, 1)
-            assert intr.shape == (self.block, self.batch_size, 1)
+            assert actions.shape == (self.block+1, self.batch_size)
+            assert extr.shape == (self.block, self.batch_size)
+            assert intr.shape == (self.block, self.batch_size)
             assert states1[0].shape == (self.batch_size, 512) and states1[1].shape == (self.batch_size, 512)
             assert states2[0].shape == (self.batch_size, 512) and states2[1].shape == (self.batch_size, 512)
-            assert dones.shape == (self.batch_size, 1)
+            assert dones.shape == (self.block, self.batch_size)
 
             block = Block(obs=obs,
                           actions=actions,
+                          probs=probs,
                           extr=extr,
                           intr=intr,
                           states1=states1,
@@ -288,12 +295,13 @@ class LocalBuffer:
     def __init__(self):
         self.obs_buffer = []
         self.action_buffer = []
+        self.prob_buffer = []
         self.extr_buffer = []
         self.intr_buffer = []
         self.state1_buffer = []
         self.state2_buffer = []
 
-    def add(self, obs, action, extr, intr, state1, state2):
+    def add(self, obs, action, prob, extr, intr, state1, state2):
         """
         This function is called after every time step to store data into list
 
@@ -305,6 +313,7 @@ class LocalBuffer:
         """
         self.obs_buffer.append(obs)
         self.action_buffer.append(action)
+        self.prob_buffer.append(prob)
         self.extr_buffer.append(extr)
         self.intr_buffer.append(intr)
         self.state1_buffer.append(state1)
@@ -324,10 +333,15 @@ class LocalBuffer:
         """
         obs = np.stack(self.obs_buffer).astype(np.uint8)
         actions = np.stack(self.action_buffer).astype(np.int32)
+        probs = np.stack(self.prob_buffer).astype(np.float32)
         extr = np.stack(self.extr_buffer).astype(np.float32)
         intr = np.stack(self.intr_buffer).astype(np.float32)
         states1 = np.stack(self.state1_buffer).astype(np.float32)
         states2 = np.stack(self.state2_buffer).astype(np.float32)
+
+        dones = np.zeros_like(extr)
+        dones[-1] = 1
+        dones = dones.astype(np.bool)
 
         length = len(obs)
 
@@ -336,6 +350,7 @@ class LocalBuffer:
 
         self.obs_buffer.clear()
         self.action_buffer.clear()
+        self.prob_buffer.clear()
         self.extr_buffer.clear()
         self.intr_buffer.clear()
         self.state1_buffer.clear()
@@ -343,10 +358,12 @@ class LocalBuffer:
 
         return Episode(obs=obs,
                        actions=actions,
+                       probs=probs,
                        extr=extr,
                        intr=intr,
                        states1=states1,
                        states2=states2,
+                       dones=dones,
                        length=length,
                        total_extr=total_extr,
                        total_intr=total_intr,
