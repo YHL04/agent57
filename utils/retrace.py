@@ -8,8 +8,8 @@ from .value_rescale import value_rescaling, inverse_value_rescaling
 def get_index(x, idx):
     """
     Code modified from
-    https://github.com/michaelnny/deep_rl_zoo/blob/main/deep_rl_zoo/nonlinear_bellman.py
     https://github.com/deepmind/trfl/blob/master/trfl/retrace_ops.py
+    https://github.com/michaelnny/deep_rl_zoo/blob/main/deep_rl_zoo/nonlinear_bellman.py
 
     Returns x that correspond to index in idx
 
@@ -44,6 +44,13 @@ def compute_retrace_target(q_t, a_t, r_t, discount_t, c_t, pi_t):
 
         c_t = λ min(1, π(x_t, a_t) / μ(x_t, a_t)).
 
+    Hence:
+
+        T_tm1 = r_t + γ * (exp_q_t - c_t * qa_t) + γ * c_t * T_t
+
+    Define:
+
+        current = r_t + γ * (exp_q_t - c_t * qa_t)
 
     Args:
         q_t (T, B, action_dim): target network q value at time t+1
@@ -52,32 +59,35 @@ def compute_retrace_target(q_t, a_t, r_t, discount_t, c_t, pi_t):
         discount_t (T, B): discount at time t
         c_t (T, B): importance weights at time t+1
         pi_t (T, B, action_dim): policy probabilities from online network at time t+1
+
+
+    TODO:
+        understand the math derivations
     """
     exp_q_t = (pi_t * q_t).sum(axis=-1)
     q_a_t = get_index(q_t, a_t)
 
-    g = r_t[-1] + discount_t[-1] * (exp_q_t[-1] - c_t[-1] * q_a_t[-1])
-    returns = [g]
-    for t in reversed(range(q_a_t.size(0) - 1)):
-        g = r_t[t] + discount_t[t] * (exp_q_t[t] - c_t[t] * q_a_t[t] + c_t[t] * g)
-        # g = r_t[t] + discount_t[t] * exp_q_t[t] + discount_t[t] * c_t[t] * (g - q_a_t[t])
+    current = r_t + discount_t * (exp_q_t - c_t * q_a_t)
+    decay = discount_t * c_t
+
+    # g = current[-1]
+    # returns = [g]
+    g = q_a_t[-1]
+    returns = []
+    for t in reversed(range(q_a_t.size(0))):
+        g = current[t] + decay[t] * g
+        # g = r_t[t] + discount_t[t] * (exp_q_t[t] - c_t[t] * q_a_t[t] + c_t[t] * g)
+        # g = r_t[t] + discount_t[t] * (exp_q_t[t] - c_t[t] * q_a_t[t]) + discount_t[t] * c_t[t] * g)
+        # g = current[t] + decay * g
         returns.insert(0, g)
 
     return torch.stack(returns, dim=0).detach()
 
 
-def compute_retrace_loss(q_t,
-                         q_t1,
-                         a_t,
-                         a_t1,
-                         r_t,
-                         pi_t1,
-                         mu_t1,
-                         discount_t,
-                         lambda_=0.95,
-                         eps=1e-8
-                         ):
+def compute_retrace_loss(q_t, q_t1, a_t, a_t1, r_t, pi_t1, mu_t1, discount_t, lambda_=0.95, eps=1e-8):
     """
+    Apply inverse of value rescaling before passing into compute_retrace_target()
+    Then, apply value rescaling after getting target from compute_retrace_target()
 
     Args:
         q_t (T, B, action_dim): expected q values at time t
@@ -90,9 +100,6 @@ def compute_retrace_loss(q_t,
         discount_t (T, B): discount factor
         lambda_ (int=0.95): lambda constant for retrace loss
         eps (int=1e-2): small value to add to mu for numerical stability
-
-    TODO:
-        debug and understand
 
     """
     T, B, action_dim = q_t.shape

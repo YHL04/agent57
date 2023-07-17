@@ -23,7 +23,7 @@ from .replaybuffer import ReplayBuffer
 
 from models import Model
 from curiosity import EpisodicNovelty, LifelongNovelty
-from utils import compute_retrace_loss, inverse_value_rescaling
+from utils import compute_retrace_loss, value_rescaling, inverse_value_rescaling
 
 
 class Learner:
@@ -195,7 +195,8 @@ class Learner:
 
         with self.lock_model:
             qe, qi, state1, state2 = self.eval_model(obs, state1, state2)
-            q_values = inverse_value_rescaling(qe) + self.beta * inverse_value_rescaling(qi)
+            q_values = value_rescaling(inverse_value_rescaling(qe) + self.beta * inverse_value_rescaling(qi))
+            # q_values = qe + self.beta * qi
 
             intr_e = self.episodic_novelty.get_reward(obs)
             intr_l = self.lifelong_novelty.get_reward(obs)
@@ -406,10 +407,9 @@ class Learner:
         q1 = torch.stack(q1)
         q2 = torch.stack(q2)
 
-        pi_t1 = F.softmax(inverse_value_rescaling(q1), dim=-1)
-        pi_t2 = F.softmax(inverse_value_rescaling(q2), dim=-1)
+        pi_t1 = F.softmax(q1, dim=-1)
+        pi_t2 = F.softmax(q2, dim=-1)
 
-        # pointless?
         discount_t = (~dones).float() * self.discount
 
         extr_loss = compute_retrace_loss(
