@@ -47,3 +47,6 @@ https://arxiv.org/pdf/2003.13350.pdf
 ## Helpful Repositories
 
  [![Readme Card](https://github-readme-stats.vercel.app/api/pin/?username=michaelnny&repo=deep_rl_zoo)](https://github.com/michaelnny/deep_rl_zoo)
+ 
+ [![Readme Card](https://github-readme-stats.vercel.app/api/pin/?username=deepmind&repo=trfl)](https://github.com/deepmind/trfl)
+
