@@ -54,10 +54,9 @@ class ReplayBuffer:
     Episodes into the buffer, log the data, and prepare Block for training.
 
     Parameters:
-    buffer_size (int): Size of self.buffer
-    batch_size (int): Training batch size
-    block (int): Time step length of blocks
-    d_model (int): Dimension of model
+    size (int): Size of self.buffer
+    B (int): Training batch size
+    T (int): Time step length of blocks
     discount (float): gamma constant for next q in q learning
     sample_queue (mp.Queue): FIFO queue to store Episode into ReplayBuffer
     batch_queue (mp.Queue): FIFO queue to sample batches for training from ReplayBuffer
@@ -66,18 +65,18 @@ class ReplayBuffer:
     """
 
     def __init__(self,
-                 buffer_size,
-                 batch_size,
-                 block,
+                 size,
+                 B,
+                 T,
                  discount,
                  sample_queue,
                  batch_queue,
                  priority_queue
                  ):
 
-        self.buffer_size = buffer_size
-        self.batch_size = batch_size
-        self.block = block
+        self.size = size
+        self.B = B
+        self.T = T
 
         self.discount = discount
 
@@ -151,7 +150,7 @@ class ReplayBuffer:
             self.frames += episode.length
             self.buffer.append(episode)
 
-            while self.frames > self.buffer_size:
+            while self.frames > self.size:
                 self.frames -= self.buffer[0].length
                 self.buffer.popleft()
 
@@ -183,47 +182,48 @@ class ReplayBuffer:
             dones = []
             idxs = []
 
-            for _ in range(self.batch_size):
+            for _ in range(self.B):
                 buffer_idx = random.randrange(0, len(self.buffer))
-                time_idx = random.randrange(0, self.buffer[buffer_idx].length-self.block)
+                time_idx = random.randrange(0, self.buffer[buffer_idx].length-self.T+1)
                 idxs.append([buffer_idx, time_idx])
 
-                extr.append(self.buffer[buffer_idx].extr[time_idx:time_idx+self.block])
-                intr.append(self.buffer[buffer_idx].intr[time_idx:time_idx+self.block])
-                obs.append(self.buffer[buffer_idx].obs[time_idx:time_idx+self.block+1])
-                actions.append(self.buffer[buffer_idx].actions[time_idx:time_idx+self.block+1])
-                probs.append(self.buffer[buffer_idx].probs[time_idx:time_idx+self.block+1])
-                states1.append(torch.tensor(self.buffer[buffer_idx].states1[time_idx]))
-                states2.append(torch.tensor(self.buffer[buffer_idx].states2[time_idx]))
-                dones.append(torch.tensor(self.buffer[buffer_idx].dones[time_idx:time_idx+self.block+1]))
+                extr.append(self.buffer[buffer_idx].extr[time_idx:time_idx+self.T])
+                intr.append(self.buffer[buffer_idx].intr[time_idx:time_idx+self.T])
+                obs.append(self.buffer[buffer_idx].obs[time_idx:time_idx+self.T+1])
+                actions.append(self.buffer[buffer_idx].actions[time_idx:time_idx+self.T+1])
+                probs.append(self.buffer[buffer_idx].probs[time_idx:time_idx+self.T+1])
+                states1.append(self.buffer[buffer_idx].states1[time_idx])
+                states2.append(self.buffer[buffer_idx].states2[time_idx])
+                dones.append(self.buffer[buffer_idx].dones[time_idx:time_idx+self.T])
 
             obs = torch.tensor(np.stack(obs), dtype=torch.float32) / 255.
             actions = torch.tensor(np.stack(actions), dtype=torch.int32)
             probs = torch.tensor(np.stack(probs), dtype=torch.float32)
 
-            extr = torch.tensor(extr, dtype=torch.float32)
-            intr = torch.tensor(intr, dtype=torch.float32)
+            extr = torch.tensor(np.stack(extr), dtype=torch.float32)
+            intr = torch.tensor(np.stack(intr), dtype=torch.float32)
 
             states1 = torch.tensor(np.stack(states1), dtype=torch.float32)
             states2 = torch.tensor(np.stack(states2), dtype=torch.float32)
             states1 = (states1[:, 0, :], states1[:, 1, :])
             states2 = (states2[:, 0, :], states2[:, 1, :])
 
-            dones = torch.tensor(dones, dtype=torch.bool)
+            dones = torch.tensor(np.stack(dones), dtype=torch.bool)
 
             obs = obs.transpose(0, 1)
             actions = actions.transpose(0, 1)
             probs = probs.transpose(0, 1)
             extr = extr.transpose(0, 1)
             intr = intr.transpose(0, 1)
+            dones = dones.transpose(0, 1)
 
-            assert obs.shape == (self.block+1, self.batch_size, 4, 105, 80)
-            assert actions.shape == (self.block+1, self.batch_size)
-            assert extr.shape == (self.block, self.batch_size)
-            assert intr.shape == (self.block, self.batch_size)
-            assert states1[0].shape == (self.batch_size, 512) and states1[1].shape == (self.batch_size, 512)
-            assert states2[0].shape == (self.batch_size, 512) and states2[1].shape == (self.batch_size, 512)
-            assert dones.shape == (self.block, self.batch_size)
+            assert obs.shape == (self.T+1, self.B, 4, 105, 80)
+            assert actions.shape == (self.T+1, self.B)
+            assert extr.shape == (self.T, self.B)
+            assert intr.shape == (self.T, self.B)
+            assert states1[0].shape == (self.B, 512) and states1[1].shape == (self.B, 512)
+            assert states2[0].shape == (self.B, 512) and states2[1].shape == (self.B, 512)
+            assert dones.shape == (self.T, self.B)
 
             block = Block(obs=obs,
                           actions=actions,
@@ -251,8 +251,8 @@ class ReplayBuffer:
         epsilon (float): epsilon of Learner for logging purposes
 
         """
-        assert states1.shape == (self.batch_size, self.block+1, 2, 512)
-        assert states2.shape == (self.batch_size, self.block+1, 2, 512)
+        assert states1.shape == (self.B, self.T+1, 2, 512)
+        assert states2.shape == (self.B, self.T+1, 2, 512)
 
         with self.lock:
 
@@ -261,8 +261,8 @@ class ReplayBuffer:
             #     buffer_idx, time_idx = idx
             #
             #     try:
-            #         self.buffer[buffer_idx].states1[time_idx:time_idx+self.block+1] = state1
-            #         self.buffer[buffer_idx].states2[time_idx:time_idx+self.block+1] = state2
+            #         self.buffer[buffer_idx].states1[time_idx:time_idx+self.T+1] = state1
+            #         self.buffer[buffer_idx].states2[time_idx:time_idx+self.T+1] = state2
             #
             #     except IndexError:
             #         pass
@@ -331,6 +331,13 @@ class LocalBuffer:
             total_time (float): total time for actor to complete episode in seconds
 
         """
+
+        # pad obs, action, prob for retrace so that done can be included
+        # since last element is not needed for retrace loss
+        self.obs_buffer.append(np.zeros_like(self.obs_buffer[-1]))
+        self.action_buffer.append(np.zeros_like(self.action_buffer[-1]))
+        self.prob_buffer.append(np.zeros_like(self.prob_buffer[-1]))
+
         obs = np.stack(self.obs_buffer).astype(np.uint8)
         actions = np.stack(self.action_buffer).astype(np.int32)
         probs = np.stack(self.prob_buffer).astype(np.float32)
@@ -343,7 +350,7 @@ class LocalBuffer:
         dones[-1] = 1
         dones = dones.astype(np.bool)
 
-        length = len(obs)
+        length = len(extr)
 
         total_extr = np.sum(extr).item()
         total_intr = np.sum(intr).item()

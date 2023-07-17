@@ -10,15 +10,14 @@ import time
 from agent import Learner
 
 
-def run_worker(rank,
-               env_name,
-               buffer_size,
-               batch_size,
-               burnin,
-               rollout,
-               n_cos,
-               n_tau
-               ):
+def run_worker(
+    rank,
+    env_name,
+    buffer_size,
+    batch_size,
+    burnin,
+    rollout
+):
     """
     Workers:
         - Learner.run()
@@ -44,8 +43,6 @@ def run_worker(rank,
             args=(env_name,
                   buffer_size,
                   batch_size,
-                  n_cos,
-                  n_tau,
                   burnin,
                   rollout
                   ),
@@ -69,8 +66,6 @@ def main(env_name,
          batch_size,
          burnin,
          rollout,
-         n_cos,
-         n_tau
          ):
     # set localhost and port
     os.environ["MASTER_ADDR"] = "localhost"
@@ -82,9 +77,7 @@ def main(env_name,
               buffer_size,
               batch_size,
               burnin,
-              rollout,
-              n_cos,
-              n_tau
+              rollout
               ),
         nprocs=2,
         join=True
@@ -96,7 +89,5 @@ if __name__ == "__main__":
          buffer_size=500_000,
          batch_size=64,
          burnin=0,
-         rollout=10,
-         n_cos=64,
-         n_tau=64
+         rollout=10
          )

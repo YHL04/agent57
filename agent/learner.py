@@ -23,7 +23,7 @@ from .replaybuffer import ReplayBuffer
 
 from models import Model
 from curiosity import EpisodicNovelty, LifelongNovelty
-from utils import compute_retrace_loss, value_rescaling, inverse_value_rescaling
+from utils import compute_retrace_loss, inverse_value_rescaling
 
 
 class Learner:
@@ -32,14 +32,11 @@ class Learner:
     Call run() to start the main training loop.
 
     Parameters:
-    buffer_size (int): The size of the buffer in ReplayBuffer
-    batch_size (int): Batch size for training
-    n_layers (int): Number of layers in transformer
-    n_cos (int): Number of cosine samples for each tau in IQN
-    n_tau (int): Number of tau samples for IQN each representing a value for a percentile
-    n_step (int): N step returns see https://paperswithcode.com/method/n-step-returns
-    burnin (int): Length of burnin, concept from R2D2 paper
-    rollout (int): Length of rollout, concept from R2D2 paper
+        env_name (string): Environment name in gym[atari]
+        size (int): The size of the buffer in ReplayBuffer
+        B (int): Batch size for training
+        burnin (int): Length of burnin, concept from R2D2 paper
+        rollout (int): Length of rollout, concept from R2D2 paper
 
     """
     epsilon = 1
@@ -56,10 +53,8 @@ class Learner:
 
     def __init__(self,
                  env_name,
-                 buffer_size,
-                 batch_size,
-                 n_cos,
-                 n_tau,
+                 size,
+                 B,
                  burnin,
                  rollout
                  ):
@@ -67,9 +62,8 @@ class Learner:
         np.random.seed(0)
         random.seed(0)
 
-        self.buffer_size = buffer_size
-        self.batch_size = batch_size
-        self.n_tau = n_tau
+        self.size = size
+        self.B = B
 
         # models
         self.action_size = gym.make(env_name).action_space.n
@@ -95,7 +89,7 @@ class Learner:
         # hyper-parameters
         self.burnin = burnin
         self.rollout = rollout
-        self.block = burnin + rollout
+        self.T = burnin + rollout
 
         # optimizer and loss functions
         self.opt = optim.Adam(self.model.parameters(), lr=self.lr)
@@ -112,9 +106,9 @@ class Learner:
         self.batch_data = []
 
         # start replay buffer
-        self.replay_buffer = ReplayBuffer(buffer_size=buffer_size,
-                                          batch_size=batch_size,
-                                          block=burnin+rollout,
+        self.replay_buffer = ReplayBuffer(size=size,
+                                          B=B,
+                                          T=burnin+rollout,
                                           discount=self.discount,
                                           sample_queue=self.sample_queue,
                                           batch_queue=self.batch_queue,
@@ -231,8 +225,7 @@ class Learner:
         state2 = (torch.tensor(state2[0], dtype=torch.float32, device=self.device),
                   torch.tensor(state2[1], dtype=torch.float32, device=self.device))
 
-        action, state1, state2, intr = self.get_policy(obs, state1, state2)
-        return action, state1, state2, intr
+        return self.get_policy(obs, state1, state2)
 
     def answer_requests(self):
         """
@@ -357,20 +350,20 @@ class Learner:
         Gradients are cached for n_accumulate steps before optimizer.step()
 
         Args:
-            obs (block+1, batch_size, channels, h, w]): tokens
-            actions (block+1, batch_size): actions
-            probs (block+1, batch_size): probs
-            extr (block, batch_size): extrinsic rewards
-            intr (block, batch_size): extrinsic rewards
-            states1 (batch_size, dim): recurrent states
-            states2 (batch_size, dim): recurrent states
-            dones (block+1, batch_size): boolean indicating episode termination
+            obs (block+1, B, channels, h, w]): tokens
+            actions (block+1, B): actions
+            probs (block+1, B): probs
+            extr (block, B): extrinsic rewards
+            intr (block, B): extrinsic rewards
+            states1 (B, dim): recurrent states
+            states2 (B, dim): recurrent states
+            dones (block+1, B): boolean indicating episode termination
 
         Returns:
             loss (float): Loss of critic model
             bert_loss (float): Loss of bert masked language modeling
-            new_states1 (batch_size, dim): for lstm
-            new_states2 (batch_size, dim): for lstm
+            new_states1 (B, dim): for lstm
+            new_states2 (B, dim): for lstm
         """
 
         with torch.no_grad():
@@ -378,29 +371,34 @@ class Learner:
             state2 = (states2[0].detach().clone(), states2[1].detach().clone())
 
             new_states1, new_states2 = [], []
-            for t in range(self.burnin+self.n_step):
+            for t in range(self.burnin):
                 new_states1.append((state1[0].detach(), state1[1].detach()))
                 new_states2.append((state2[0].detach(), state2[1].detach()))
 
                 _, _, state1, state2 = self.target_model(obs[t], state1, state2)
 
-            next_q1, next_q2 = [], []
-            for t in range(self.burnin+self.n_step, self.block+self.n_step):
+            target_q1, target_q2 = [], []
+            for t in range(self.burnin, self.T+1):
                 new_states1.append((state1[0].detach(), state1[1].detach()))
                 new_states2.append((state2[0].detach(), state2[1].detach()))
 
-                next_q1_, next_q2_, state1, state2 = self.target_model(obs[t], state1, state2)
-                next_q1.append(next_q1_)
-                next_q2.append(next_q2_)
+                target_q1_, target_q2_, state1, state2 = self.target_model(obs[t], state1, state2)
+                target_q1.append(target_q1_)
+                target_q2.append(target_q2_)
 
-            next_q1 = torch.stack(next_q1)
-            next_q2 = torch.stack(next_q2)
+            target_q1 = torch.stack(target_q1)
+            target_q2 = torch.stack(target_q2)
 
         self.model.zero_grad()
 
-        state1, state2 = new_states1[self.burnin], new_states2[self.burnin]
+        state1 = (states1[0].detach().clone(), states1[1].detach().clone())
+        state2 = (states2[0].detach().clone(), states2[1].detach().clone())
+
+        for t in range(self.burnin):
+            _, _, state1, state2 = self.model(obs[t], state1, state2)
+
         q1, q2 = [], []
-        for t in range(self.burnin, self.block):
+        for t in range(self.burnin, self.T+1):
             q1_, q2_, state1, state2 = self.model(obs[t], state1, state2)
             q1.append(q1_)
             q2.append(q2_)
@@ -415,24 +413,24 @@ class Learner:
         discount_t = (~dones).float() * self.discount
 
         extr_loss = compute_retrace_loss(
-            q_t=q1,
-            q_t1=next_q1,
+            q_t=q1[:-1],
+            q_t1=target_q1[1:],
             a_t=actions[:-1],
             a_t1=actions[1:],
             r_t=extr,
-            pi_t1=pi_t1,
+            pi_t1=pi_t1[1:],
             mu_t1=probs[1:],
-            discount_t1=discount_t[:-1]
+            discount_t=discount_t
         )
         intr_loss = compute_retrace_loss(
-            q_t=q2,
-            q_t1=next_q2,
+            q_t=q2[:-1],
+            q_t1=target_q2[1:],
             a_t=actions[:-1],
             a_t1=actions[1:],
             r_t=intr,
-            pi_t1=pi_t2,
+            pi_t1=pi_t2[1:],
             mu_t1=probs[1:],
-            discount_t1=discount_t[:-1]
+            discount_t=discount_t
         )
 
         loss = extr_loss + intr_loss
