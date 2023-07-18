@@ -2,7 +2,7 @@
 
 import torch
 
-from .value_rescale import value_rescaling, inverse_value_rescaling
+from .value_rescale import rescale, inv_rescale
 
 
 def get_index(x, idx):
@@ -34,6 +34,8 @@ def get_index(x, idx):
 
 def compute_retrace_target(q_t, a_t, r_t, discount_t, c_t, pi_t):
     """
+    Compute target for Transformed Retrace Operators
+
     According to https://github.com/deepmind/trfl/blob/master/trfl/retrace_ops.py:
     New action-value estimates (target value 'T') must be expressable in this
     recurrent form:
@@ -64,15 +66,18 @@ def compute_retrace_target(q_t, a_t, r_t, discount_t, c_t, pi_t):
     TODO:
         understand the math derivations
     """
+    # h-1(q_t)
+    q_t = inv_rescale(q_t)
+
     exp_q_t = (pi_t * q_t).sum(axis=-1)
     q_a_t = get_index(q_t, a_t)
 
-    current = r_t + discount_t * (exp_q_t - c_t * q_a_t)
+    current = rescale(r_t + discount_t * (exp_q_t - c_t * q_a_t))
     decay = discount_t * c_t
 
     # g = current[-1]
     # returns = [g]
-    g = q_a_t[-1]
+    g = rescale(q_a_t[-1])
     returns = []
     for t in reversed(range(q_a_t.size(0))):
         g = current[t] + decay[t] * g
@@ -121,9 +126,7 @@ def compute_retrace_loss(q_t, q_t1, a_t, a_t1, r_t, pi_t1, mu_t1, discount_t, la
         c_t1 = torch.minimum(torch.tensor(1.0), pi_a_t1 / (mu_t1 + eps)) * lambda_
 
         # get transformed retrace targets
-        q_t1 = inverse_value_rescaling(q_t1)
         target = compute_retrace_target(q_t1, a_t1, r_t, discount_t, c_t1, pi_t1)
-        target = value_rescaling(target)
 
     # get expected q value of taking action a_t
     expected = get_index(q_t, a_t)

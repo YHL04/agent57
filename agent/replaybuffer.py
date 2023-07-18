@@ -219,6 +219,7 @@ class ReplayBuffer:
 
             assert obs.shape == (self.T+1, self.B, 4, 105, 80)
             assert actions.shape == (self.T+1, self.B)
+            assert probs.shape == (self.T+1, self.B)
             assert extr.shape == (self.T, self.B)
             assert intr.shape == (self.T, self.B)
             assert states1[0].shape == (self.B, 512) and states1[1].shape == (self.B, 512)

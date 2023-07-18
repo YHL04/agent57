@@ -3,7 +3,7 @@
 import torch
 
 
-def value_rescaling(z, eps=1e-3):
+def rescale(z, eps=1e-3):
     """
     Rescaling the expected q values with the following function:
     h(z) = sign(z) * sqrt(abs(z) + 1) - 1) + eps * z
@@ -19,10 +19,11 @@ def value_rescaling(z, eps=1e-3):
     """
 
     z = torch.sign(z) * (torch.sqrt(torch.abs(z) + 1) - 1) + eps * z
+    assert z.isnan().any() == False, "nans detected"
     return z
 
 
-def inverse_value_rescaling(z, eps=1e-3):
+def inv_rescale(z, eps=1e-3):
     """
     Inverse of h(x) function
 
@@ -39,4 +40,5 @@ def inverse_value_rescaling(z, eps=1e-3):
     denominator = 2 * eps
 
     z = torch.sign(z) * ((numerator / denominator) - 1)
+    assert z.isnan().any() == False, "nans detected"
     return z

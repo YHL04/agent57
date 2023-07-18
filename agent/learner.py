@@ -23,7 +23,7 @@ from .replaybuffer import ReplayBuffer
 
 from models import Model
 from curiosity import EpisodicNovelty, LifelongNovelty
-from utils import compute_retrace_loss, value_rescaling, inverse_value_rescaling
+from utils import compute_retrace_loss, rescale, inv_rescale
 
 
 class Learner:
@@ -195,7 +195,7 @@ class Learner:
 
         with self.lock_model:
             qe, qi, state1, state2 = self.eval_model(obs, state1, state2)
-            q_values = value_rescaling(inverse_value_rescaling(qe) + self.beta * inverse_value_rescaling(qi))
+            q_values = rescale(inv_rescale(qe) + self.beta * inv_rescale(qi))
             # q_values = qe + self.beta * qi
 
             intr_e = self.episodic_novelty.get_reward(obs)
