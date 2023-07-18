@@ -10,18 +10,18 @@ An unofficial implementation of Agent57 for Atari from DeepMind
 - [X] Double Q Network
 - [X] Dueling Network Architecture
 - [X] N-step Q Learning
-- [X] Distributed Architecture (1 Actor)
+- [X] Distributed Architecture (Multi Actor)
 - [X] Update new recurrent states after training step
 - [X] LSTM Recurrence
 - [X] Episodic Novelty Module  
 - [X] Lifelong Novelty Module
 - [X] Separate Nets for extrinsic and intrinsic reward
-- [X] Reward value rescaling
-
+- [X] Retrace
+     
+- [ ] Reward value rescaling
 - [ ] Prioritized Experience Replay
-- [ ] Retrace
 - [ ] Adaptive Exploration with meta-controller
-- [ ] Distributed Architecture (Multi Batched Actor)
+- [ ] Batched Inference (SEEDRL)
 
 
 ## Relevant Papers

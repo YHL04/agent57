@@ -36,7 +36,7 @@ def run_worker(
 
     if rank == 0:
         # create Learner in a remote location
-        rpc.init_rpc("learner", rank=rank, world_size=2)
+        rpc.init_rpc("learner", rank=rank, world_size=1+num_actors)
 
         learner_rref = rpc.remote(
             "learner",
@@ -58,7 +58,7 @@ def run_worker(
 
     else:
         # Create actor in a remote location
-        rpc.init_rpc(f"actor{rank-1}", rank=rank, world_size=2)
+        rpc.init_rpc(f"actor{rank-1}", rank=rank, world_size=1+num_actors)
 
     rpc.shutdown()
 
@@ -83,14 +83,14 @@ def main(env_name,
               burnin,
               rollout
               ),
-        nprocs=num_actors,
+        nprocs=1+num_actors,
         join=True
     )
 
 
 if __name__ == "__main__":
     main(env_name="BreakoutDeterministic-v4",
-         num_actors=4,
+         num_actors=2,
          buffer_size=500_000,
          batch_size=64,
          burnin=0,
