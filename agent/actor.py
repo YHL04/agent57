@@ -31,7 +31,7 @@ class Actor:
         self.id = id
 
         self.N = N
-        self.betas = self.get_betas(N, beta)
+        self.betas = self.get_betas(id, beta)
 
         self.env = [Env(env_name) for _ in range(N)]
         self.local_buffer = [LocalBuffer() for _ in range(N)]
@@ -74,7 +74,6 @@ class Actor:
             the learner. It returns action(float) and state(np.array)
 
         """
-
         return self.learner_rref.rpc_async().queue_request(obs, state1, state2, beta)
 
     def return_episode(self, episode):
@@ -101,9 +100,9 @@ class Actor:
         """
 
         while True:
-            obs = np.stack([env.reset() for env in self.env])
-            state1 = (np.zeros((self.N, 512)), np.zeros((self.N, 512)))
-            state2 = (np.zeros((self.N, 512)), np.zeros((self.N, 512)))
+            obs = [env.reset() for env in self.env]
+            state1 = (np.zeros((1, 512)), np.zeros((1, 512)))
+            state2 = (np.zeros((1, 512)), np.zeros((1, 512)))
 
             start = time.time()
             done = False
@@ -111,23 +110,18 @@ class Actor:
             while not done:
                 action, prob, next_state1, next_state2, intr = self.get_action(obs, state1, state2, self.betas).wait()
 
-                #  next_obs, reward, done = self.env.step(action)
-                returns = [env.step(action) for env, action in zip(self.env, action)]
-                next_obs, extr, done = list(map(list, zip(*returns)))
-                next_obs, extr, done = np.stack(next_obs), np.stack(extr), np.stack(done)
+                next_obs, reward, done = self.env.step(action)
 
-                for i in range(self.N):
-                    self.local_buffer.add(obs[i], action[i], prob[i], extr[i], intr[i],
-                                          (state1[i][0].squeeze(), state1[i][1].squeeze()),
-                                          (state2[i][0].squeeze(), state2[i][1].squeeze()))
+                self.local_buffer.add(obs, action, prob, reward, intr,
+                                      (state1[0].squeeze(), state1[1].squeeze()),
+                                      (state2[0].squeeze(), state2[1].squeeze()))
 
                 obs = next_obs
                 state1 = next_state1
                 state2 = next_state2
 
-            for i in range(self.N):
-                episode = self.local_buffer.finish(time.time()-start)
-                self.return_episode(episode).wait()
+            episode = self.local_buffer.finish(time.time()-start)
+            self.return_episode(episode).wait()
 
             if self.id == 1:
-                self.env[0].render()
+                self.env.render()

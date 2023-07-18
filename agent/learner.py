@@ -45,7 +45,7 @@ class Learner:
 
     lr = 1e-4
     discount = 0.95
-    beta = 0.2
+    beta = 0.05  # 0.2
 
     update_every = 400
     save_every = 100
@@ -53,9 +53,9 @@ class Learner:
 
     def __init__(self,
                  env_name,
+                 N,
                  size,
                  B,
-                 N,
                  burnin,
                  rollout
                  ):
@@ -124,16 +124,16 @@ class Learner:
         self.pending_rpc = None
         self.await_rpc = False
 
-        self.actor_rref = self.spawn_actor(learner_rref=RRef(self),
-                                           env_name=env_name,
-                                           N=self.N,
-                                           beta=self.beta
-                                           )
+        self.actor_rref = self.spawn_actors(learner_rref=RRef(self),
+                                            env_name=env_name,
+                                            N=self.N,
+                                            beta=self.beta
+                                            )
 
         self.updates = 0
 
     @staticmethod
-    def spawn_actor(learner_rref, env_name, N, beta):
+    def spawn_actors(learner_rref, env_name, N, beta):
         """
         Start actor by calling actor.remote().run()
         Actors communicate with learner through rpc and RRef
@@ -146,19 +146,22 @@ class Learner:
         Returns:
             actor_rref (RRef): to reference the actor from the learner
         """
-        actor_rref = rpc.remote("actor",
-                                Actor,
-                                args=(learner_rref,
-                                      0,
-                                      env_name,
-                                      N,
-                                      beta
-                                      ),
-                                timeout=0
-                                )
-        actor_rref.remote().run()
+        actor_rrefs = []
 
-        return actor_rref
+        for i in range(N):
+            actor_rref = rpc.remote("actor",
+                                    Actor,
+                                    args=(learner_rref,
+                                          i,
+                                          env_name,
+                                          beta
+                                          ),
+                                    timeout=0
+                                    )
+            actor_rref.remote().run()
+            actor_rrefs.append(actor_rref)
+
+        return actor_rrefs
 
     @async_execution
     def queue_request(self, *args):
@@ -195,8 +198,6 @@ class Learner:
 
     @torch.inference_mode()
     def get_policy(self, obs, state1, state2, beta):
-        batch = obs.size(0)
-
         self.epsilon -= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
 
@@ -208,7 +209,6 @@ class Learner:
             intr_e = self.episodic_novelty.get_reward(obs)
             intr_l = self.lifelong_novelty.get_reward(obs)
             intr = intr_e * intr_l
-            intr = intr.squeeze().numpy()
 
             state1 = (state1[0].detach().cpu().numpy(),
                       state1[1].detach().cpu().numpy())
@@ -216,19 +216,19 @@ class Learner:
                       state2[1].detach().cpu().numpy())
 
         if random.random() <= self.epsilon:
-            action = np.random.randint(0, self.action_size, size=(batch,))
-            prob = np.full((batch,), self.epsilon / self.action_size)
+            action = random.randrange(0, self.action_size)
+            prob = self.epsilon / self.action_size
 
             return action, prob, state1, state2, intr
 
         # get action and probability of that action according to Agent57 (pg 19)
-        action = torch.argmax(q_values.squeeze()).detach().cpu().squeeze().numpy()
-        prob = np.full((batch,), 1 - (self.epsilon * ((self.action_size - 1) / self.action_size)))
+        action = torch.argmax(q_values.squeeze()).detach().cpu().squeeze().item()
+        prob = 1 - (self.epsilon * ((self.action_size - 1) / self.action_size))
 
         return action, prob, state1, state2, intr
 
     def get_action(self, obs, state1, state2, beta):
-        obs = torch.tensor(obs, dtype=torch.float32, device=self.device) / 255.
+        obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0) / 255.
         state1 = (torch.tensor(state1[0], dtype=torch.float32, device=self.device),
                   torch.tensor(state1[1], dtype=torch.float32, device=self.device))
         state2 = (torch.tensor(state2[0], dtype=torch.float32, device=self.device),

@@ -13,6 +13,7 @@ from agent import Learner
 def run_worker(
     rank,
     env_name,
+    num_actors,
     buffer_size,
     batch_size,
     burnin,
@@ -41,6 +42,7 @@ def run_worker(
             "learner",
             Learner,
             args=(env_name,
+                  num_actors,
                   buffer_size,
                   batch_size,
                   burnin,
@@ -56,12 +58,13 @@ def run_worker(
 
     else:
         # Create actor in a remote location
-        rpc.init_rpc("actor", rank=rank, world_size=2)
+        rpc.init_rpc(f"actor{rank-1}", rank=rank, world_size=2)
 
     rpc.shutdown()
 
 
 def main(env_name,
+         num_actors,
          buffer_size,
          batch_size,
          burnin,
@@ -74,18 +77,20 @@ def main(env_name,
     mp.spawn(
         run_worker,
         args=(env_name,
+              num_actors,
               buffer_size,
               batch_size,
               burnin,
               rollout
               ),
-        nprocs=2,
+        nprocs=num_actors,
         join=True
     )
 
 
 if __name__ == "__main__":
     main(env_name="BreakoutDeterministic-v4",
+         num_actors=4,
          buffer_size=500_000,
          batch_size=64,
          burnin=0,
