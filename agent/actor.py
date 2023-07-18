@@ -31,32 +31,28 @@ class Actor:
         self.id = id
 
         self.N = N
-        self.betas = self.get_betas(id, beta)
+        self.beta = self.get_betas(id, N, beta)
 
-        self.env = [Env(env_name) for _ in range(N)]
-        self.local_buffer = [LocalBuffer() for _ in range(N)]
+        self.env = Env(env_name)
+        self.local_buffer = LocalBuffer()
 
     @staticmethod
-    def get_betas(N, beta):
+    def get_betas(i, N, beta):
         """
         Args:
             N (int): Number of envs each with different betas and discount
             beta (int): Maximum beta value
 
         Returns:
-            betas (np.array): Betas associated with each env
+            beta (int): Betas associated with each env
         """
-        betas = []
-        for i in range(N):
-            if i == 0:
-                betas.append(0)
-            elif i == N - 1:
-                betas.append(beta)
-            else:
-                x = 10 * (2*i - (N - 2)) / (N - 2)
-                betas.append(beta * sigmoid(x))
-
-        return np.array(betas)
+        if i == 0:
+            return 0
+        elif i == N - 1:
+            return beta
+        else:
+            x = 10 * (2*i - (N - 2)) / (N - 2)
+            return beta * sigmoid(x)
 
     def get_action(self, obs, state1, state2, beta):
         """
@@ -100,7 +96,7 @@ class Actor:
         """
 
         while True:
-            obs = [env.reset() for env in self.env]
+            obs = self.env.reset()
             state1 = (np.zeros((1, 512)), np.zeros((1, 512)))
             state2 = (np.zeros((1, 512)), np.zeros((1, 512)))
 
@@ -108,7 +104,7 @@ class Actor:
             done = False
 
             while not done:
-                action, prob, next_state1, next_state2, intr = self.get_action(obs, state1, state2, self.betas).wait()
+                action, prob, next_state1, next_state2, intr = self.get_action(obs, state1, state2, self.beta).wait()
 
                 next_obs, reward, done = self.env.step(action)
 
@@ -120,8 +116,6 @@ class Actor:
                 state1 = next_state1
                 state2 = next_state2
 
-            episode = self.local_buffer.finish(time.time()-start)
+            episode = self.local_buffer.finish(time.time()-start, self.beta)
             self.return_episode(episode).wait()
 
-            if self.id == 1:
-                self.env.render()

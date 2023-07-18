@@ -45,7 +45,7 @@ class Learner:
 
     lr = 1e-4
     discount = 0.95
-    beta = 0.05  # 0.2
+    beta = 0.3
 
     update_every = 400
     save_every = 100
@@ -112,6 +112,7 @@ class Learner:
                                           B=B,
                                           T=burnin+rollout,
                                           discount=self.discount,
+                                          beta=self.beta,
                                           sample_queue=self.sample_queue,
                                           batch_queue=self.batch_queue,
                                           priority_queue=self.priority_queue
@@ -149,11 +150,12 @@ class Learner:
         actor_rrefs = []
 
         for i in range(N):
-            actor_rref = rpc.remote("actor",
+            actor_rref = rpc.remote(f"actor{i}",
                                     Actor,
                                     args=(learner_rref,
                                           i,
                                           env_name,
+                                          N,
                                           beta
                                           ),
                                     timeout=0
@@ -203,8 +205,8 @@ class Learner:
 
         with self.lock_model:
             qe, qi, state1, state2 = self.eval_model(obs, state1, state2)
-            q_values = rescale(inv_rescale(qe) + beta * inv_rescale(qi))
-            # q_values = qe + beta * qi
+            # q_values = rescale(inv_rescale(qe) + beta * inv_rescale(qi))
+            q_values = qe + beta * qi
 
             intr_e = self.episodic_novelty.get_reward(obs)
             intr_l = self.lifelong_novelty.get_reward(obs)

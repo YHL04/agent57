@@ -26,6 +26,7 @@ class Episode:
     states2: np.array
     dones: np.array
     length: int
+    beta: int
     total_extr: float
     total_intr: float
     total_time: float
@@ -57,7 +58,8 @@ class ReplayBuffer:
     size (int): Size of self.buffer
     B (int): Training batch size
     T (int): Time step length of blocks
-    discount (float): gamma constant for next q in q learning
+    discount (float): Gamma constant for next q in q learning
+    beta (float): Maximum beta value in Never Give Up agent
     sample_queue (mp.Queue): FIFO queue to store Episode into ReplayBuffer
     batch_queue (mp.Queue): FIFO queue to sample batches for training from ReplayBuffer
     priority_queue (mp.Queue): FIFO queue to update new recurrent states from training to ReplayBuffer
@@ -69,6 +71,7 @@ class ReplayBuffer:
                  B,
                  T,
                  discount,
+                 beta,
                  sample_queue,
                  batch_queue,
                  priority_queue
@@ -79,6 +82,7 @@ class ReplayBuffer:
         self.T = T
 
         self.discount = discount
+        self.beta = beta
 
         self.lock = threading.Lock()
         self.sample_queue = sample_queue
@@ -156,8 +160,14 @@ class ReplayBuffer:
 
             # log
             self.logger.total_frames += episode.length
-            self.logger.reward = episode.total_extr
-            self.logger.intrinsic = episode.total_intr
+
+            # obtain extrinsic reward from purely exploitative policy
+            if episode.beta == 0:
+                self.logger.reward = episode.total_extr
+
+            # obtain intrinsic reward from purely exploration policy
+            if episode.beta == self.beta:
+                self.logger.intrinsic = episode.total_intr
 
     def sample_batch(self):
         """
@@ -320,7 +330,7 @@ class LocalBuffer:
         self.state1_buffer.append(state1)
         self.state2_buffer.append(state2)
 
-    def finish(self, total_time):
+    def finish(self, total_time, beta):
         """
         This function is called after episode ends. lists are
         converted into numpy arrays and lists are cleared for
@@ -373,6 +383,7 @@ class LocalBuffer:
                        states2=states2,
                        dones=dones,
                        length=length,
+                       beta=beta,
                        total_extr=total_extr,
                        total_intr=total_intr,
                        total_time=total_time
