@@ -66,18 +66,17 @@ def compute_retrace_target(q_t, a_t, r_t, discount_t, c_t, pi_t):
     TODO:
         understand the math derivations
     """
-    # h-1(q_t)
     q_t = inv_rescale(q_t)
 
     exp_q_t = (pi_t * q_t).sum(axis=-1)
     q_a_t = get_index(q_t, a_t)
 
-    current = rescale(r_t + discount_t * (exp_q_t - c_t * q_a_t))
+    current = r_t + discount_t * (exp_q_t - c_t * q_a_t)
     decay = discount_t * c_t
 
     # g = current[-1]
     # returns = [g]
-    g = rescale(q_a_t[-1])
+    g = q_a_t[-1]
     returns = []
     for t in reversed(range(q_a_t.size(0))):
         g = current[t] + decay[t] * g
@@ -86,7 +85,7 @@ def compute_retrace_target(q_t, a_t, r_t, discount_t, c_t, pi_t):
         # g = current[t] + decay * g
         returns.insert(0, g)
 
-    return torch.stack(returns, dim=0).detach()
+    return rescale(torch.stack(returns, dim=0).detach())
 
 
 def compute_retrace_loss(q_t, q_t1, a_t, a_t1, r_t, pi_t1, mu_t1, discount_t, lambda_=0.95, eps=1e-8):

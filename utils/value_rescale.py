@@ -19,7 +19,6 @@ def rescale(z, eps=1e-3):
     """
 
     z = torch.sign(z) * (torch.sqrt(torch.abs(z) + 1) - 1) + eps * z
-    assert z.isnan().any() == False, "nans detected"
     return z
 
 
@@ -27,7 +26,10 @@ def inv_rescale(z, eps=1e-3):
     """
     Inverse of h(x) function
 
-    Derived in Never Give Up paper: https://arxiv.org/pdf/2002.06038.pdf (pg 20)
+    Derived from:
+    https://github.com/deepmind/rlax/blob/master/rlax/_src/transforms.py
+
+    *NGU paper derivation (pg 20) is missing a torch.square() causing confusion
 
     Args:
         z (torch.tensor): value to be inverse rescaled
@@ -36,9 +38,12 @@ def inv_rescale(z, eps=1e-3):
     Returns:
         z (torch.tensor): inverse rescaled value
     """
-    numerator = torch.sqrt(1 + 4 * eps * (torch.abs(z) + 1 + eps)) - 1
-    denominator = 2 * eps
+    z = torch.sqrt(1 + 4 * eps * (eps + 1 + torch.abs(z))) / 2 / eps - 1 / 2 / eps
+    return torch.sign(z) * (torch.square(z) - 1)
 
-    z = torch.sign(z) * ((numerator / denominator) - 1)
-    assert z.isnan().any() == False, "nans detected"
-    return z
+    # NGU paper is wrong
+    # numerator = torch.sqrt(1 + 4 * eps * (torch.abs(z) + 1 + eps)) - 1
+    # denominator = 2 * eps
+
+    # z = torch.sign(z) * ((numerator / denominator) - 1)
+    # return z
