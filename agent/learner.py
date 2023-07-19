@@ -205,8 +205,8 @@ class Learner:
 
         with self.lock_model:
             qe, qi, state1, state2 = self.eval_model(obs, state1, state2)
-            # q_values = rescale(inv_rescale(qe) + beta * inv_rescale(qi))
-            q_values = qe + beta * qi
+            q_values = rescale(inv_rescale(qe) + beta * inv_rescale(qi))
+            # q_values = qe + beta * qi
 
             intr_e = self.episodic_novelty.get_reward(obs)
             intr_l = self.lifelong_novelty.get_reward(obs)

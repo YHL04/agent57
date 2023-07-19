@@ -85,6 +85,7 @@ def compute_retrace_target(q_t, a_t, r_t, discount_t, c_t, pi_t):
         # g = current[t] + decay * g
         returns.insert(0, g)
 
+    # return torch.stack(returns, dim=0).detach()
     return rescale(torch.stack(returns, dim=0).detach())
 
 
