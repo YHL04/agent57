@@ -23,8 +23,10 @@ from .replaybuffer import ReplayBuffer
 
 from models import Model
 from curiosity import EpisodicNovelty, LifelongNovelty
-from utils import compute_retrace_loss, rescale, inv_rescale, get_betas, get_discounts, \
-    tonumpy, tosqueeze, tounsqueeze, totensor, toconcat
+from utils import UCB, compute_retrace_loss, \
+    rescale, inv_rescale, \
+    get_betas, get_discounts, \
+    totensor, toconcat
 
 
 class Learner:
@@ -106,7 +108,7 @@ class Learner:
         self.batch_queue = mp.Queue(8)
         self.priority_queue = mp.Queue(8)
 
-        # params, batched_data (feeds batch), pending_rpcs (answer calls)
+        # params, batched_data (feeds batch), request_rpcs (answer calls)
         self.batch_data = []
 
         # start replay buffer
@@ -123,15 +125,17 @@ class Learner:
         self.request_futures = [Future() for _ in range(N)]
         self.return_futures = [Future() for _ in range(N)]
 
-        self.pending_rpcs = [None for _ in range(N)]
-        self.await_rpcs = [False for _ in range(N)]
-        self.pending_rpcs_count = 0
+        self.request_rpcs = [None for _ in range(N)]
+        self.return_rpcs = [None for _ in range(N)]
+        self.request_rpcs_count = 0
 
         # self.pending_rpc = None
         # self.await_rpc = False
 
         self.betas = get_betas(N, self.beta)
         self.discounts = get_discounts(N, self.discount_max, self.discount_min)
+
+        self.controller = UCB()
 
         self.actor_rref = self.spawn_actors(learner_rref=RRef(self),
                                             env_name=env_name,
@@ -184,8 +188,8 @@ class Learner:
         """
         future = self.request_futures[id].then(lambda f: f.wait())
         with self.lock:
-            self.pending_rpcs[id] = (id, *args)
-            self.pending_rpcs_count += 1
+            self.request_rpcs[id] = (id, *args)
+            self.request_rpcs_count += 1
 
         return future
 
@@ -200,7 +204,7 @@ class Learner:
         """
         future = self.return_futures[id].then(lambda f: f.wait())
         self.sample_queue.put(episode)
-        self.await_rpcs[id] = True
+        self.return_rpcs[id] = episode
 
         # Never Give Up
         with self.lock_model:
@@ -301,6 +305,18 @@ class Learner:
 
         return action, prob, state1, state2, beta
 
+    def sample_controller(self, episode):
+        # update controller's policy index with obtained extrinsic reward
+        idx = self.beta.index(episode.beta)
+        self.controller.update(idx, episode.total_extr)
+
+        # sample new policy with new beta and discount
+        new_idx = self.controller.sample()
+        new_beta = self.betas[new_idx]
+        new_discount = self.discounts[new_idx]
+
+        return new_beta, new_discount
+
     def answer_requests(self):
         """
         Thread to answer actor requests from queue_request and return_episode.
@@ -313,13 +329,13 @@ class Learner:
             with self.lock:
 
                 # clear self.return_futures to store episodes
-                for i in range(len(self.await_rpcs)):
-                    if self.await_rpcs[i]:
-                        self.await_rpcs[i] = False
-
+                for i in range(len(self.return_rpcs)):
+                    if self.return_rpcs[i] is not None:
                         future = self.return_futures[i]
                         self.return_futures[i] = Future()
-                        future.set_result(None)
+                        future.set_result(self.sample_controller(self.return_rpcs[i]))
+
+                        self.return_rpcs[i] = None
 
                 # if self.await_rpc:
                 #     self.await_rpc = False
@@ -328,10 +344,10 @@ class Learner:
                 #     self.future2 = Future()
                 #     future.set_result(None)
 
-                if self.pending_rpcs_count == self.N:
-                    results = self.get_action(*list(map(list, (zip(*self.pending_rpcs)))))
-                    self.pending_rpcs = [None for _ in range(self.N)]
-                    self.pending_rpcs_count = 0
+                if self.request_rpcs_count == self.N:
+                    results = self.get_action(*list(map(list, (zip(*self.request_rpcs)))))
+                    self.request_rpcs = [None for _ in range(self.N)]
+                    self.request_rpcs_count = 0
 
                     for i, result in enumerate(zip(*results)):
                         future = self.request_futures[i]
@@ -339,10 +355,10 @@ class Learner:
                         future.set_result(result)
 
                 # clear self.request_futures to answer requests
-                # for i in range(len(self.pending_rpcs)):
-                #     if self.pending_rpcs[i] is not None:
-                #         results = self.get_action(*self.pending_rpcs[i])
-                #         self.pending_rpcs[i] = None
+                # for i in range(len(self.request_rpcs)):
+                #     if self.request_rpcs[i] is not None:
+                #         results = self.get_action(*self.request_rpcs[i])
+                #         self.request_rpcs[i] = None
                 #
                 #         future = self.request_futures[i]
                 #         self.request_futures[i] = Future()
@@ -576,10 +592,10 @@ class Learner:
         Soft weight updates: target slowly track the weights of source with constant tau
         See DDPG paper page 4: https://arxiv.org/pdf/1509.02971.pdf
 
-        Parameters:
-        target (nn.Module): target model
-        source (nn.Module): source model
-        tau (float): soft update constant
+        Args:
+            target (nn.Module): target model
+            source (nn.Module): source model
+            tau (float): soft update constant
         """
         for target_param, param in zip(target.parameters(), source.parameters()):
             target_param.data.copy_(
@@ -591,9 +607,9 @@ class Learner:
         """
         Copy weights from source to target
 
-        Parameters:
-        target (nn.Module): target model
-        source (nn.Module): source model
+        Args:
+            target (nn.Module): target model
+            source (nn.Module): source model
         """
         for target_param, param in zip(target.parameters(), source.parameters()):
             target_param.data.copy_(param.data)

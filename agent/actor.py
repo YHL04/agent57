@@ -8,10 +8,6 @@ from environment import Env
 from utils import tosqueeze
 
 
-def sigmoid(x):
-    return 1/(1 + np.exp(-x))
-
-
 class Actor:
     """
     Class to be asynchronously run by Learner, use self.run() for main training
@@ -50,7 +46,7 @@ class Actor:
 
         Returns:
             Future() object that when used with .wait(), halts until value is ready from
-            the learner. It returns action(float) and state(np.array)
+            the learner. Future() returns (action, prob, next_state1, next_state2, intr)
 
         """
         return self.learner_rref.rpc_async().queue_request(self.id, obs, state1, state2, beta)
@@ -60,11 +56,14 @@ class Actor:
         Once episode is completed return_episode uses learner_rref and rpc_async
         to call return_episode to return Episode object to learner for training.
 
-        Parameters:
-            episode (Episode)
+        Args:
+            id (int): Actor ID
+            episode (Episode): Finished episode
 
         Returns:
-            future_await (Future): halts with .wait() until learner is finished
+            Future() object that when used with .wait(), halts until value is ready from
+            the learner. Future() returns (new_beta, new_discount)
+
         """
         return self.learner_rref.rpc_async().return_episode(self.id, episode)
 
@@ -101,5 +100,5 @@ class Actor:
                 state2 = next_state2
 
             episode = self.local_buffer.finish(time.time()-start, self.beta, self.discount)
-            self.return_episode(episode).wait()
+            self.beta, self.discount = self.return_episode(episode).wait()
 
