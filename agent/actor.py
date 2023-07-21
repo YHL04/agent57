@@ -26,33 +26,15 @@ class Actor:
         N (int): Number of environments with different betas and discount
     """
 
-    def __init__(self, learner_rref, id, env_name, N, beta):
+    def __init__(self, learner_rref, id, env_name, beta, gamma):
         self.learner_rref = learner_rref
         self.id = id
 
-        self.N = N
-        self.beta = self.get_betas(id, N, beta)
+        self.beta = beta
+        self.gamma = gamma
 
         self.env = Env(env_name)
         self.local_buffer = LocalBuffer()
-
-    @staticmethod
-    def get_betas(i, N, beta):
-        """
-        Args:
-            N (int): Number of envs each with different betas and discount
-            beta (int): Maximum beta value
-
-        Returns:
-            beta (int): Betas associated with each env
-        """
-        if i == 0:
-            return 0
-        elif i == N - 1:
-            return beta
-        else:
-            x = 10 * (2*i - (N - 2)) / (N - 2)
-            return beta * sigmoid(x)
 
     def get_action(self, obs, state1, state2, beta):
         """
@@ -70,7 +52,7 @@ class Actor:
             the learner. It returns action(float) and state(np.array)
 
         """
-        return self.learner_rref.rpc_async().queue_request(obs, state1, state2, beta)
+        return self.learner_rref.rpc_async().queue_request(self.id, obs, state1, state2, beta)
 
     def return_episode(self, episode):
         """
@@ -83,7 +65,7 @@ class Actor:
         Returns:
             future_await (Future): halts with .wait() until learner is finished
         """
-        return self.learner_rref.rpc_async().return_episode(episode)
+        return self.learner_rref.rpc_async().return_episode(self.id, episode)
 
     def run(self):
         """

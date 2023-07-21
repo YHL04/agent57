@@ -47,7 +47,7 @@ class Learner:
     discount = 0.95
     beta = 0.3
 
-    update_every = 400
+    update_every = 1000
     save_every = 100
     device = "cuda"
 
@@ -72,8 +72,8 @@ class Learner:
         model = Model(action_size=self.action_size)
 
         # episodic novelty module / lifelong novelty module
-        self.episodic_novelty = EpisodicNovelty(action_size=self.action_size)
-        self.lifelong_novelty = LifelongNovelty()
+        self.episodic_novelty = EpisodicNovelty(N, self.action_size)
+        self.lifelong_novelty = LifelongNovelty(N)
 
         self.model = nn.DataParallel(deepcopy(model)).cuda()
         self.target_model = nn.DataParallel(deepcopy(model)).cuda()
@@ -119,11 +119,15 @@ class Learner:
                                           )
 
         # start actors
-        self.future1 = Future()
-        self.future2 = Future()
+        self.request_futures = [Future() for _ in range(N)]
+        self.return_futures = [Future() for _ in range(N)]
 
-        self.pending_rpc = None
-        self.await_rpc = False
+        self.pending_rpcs = [None for _ in range(N)]
+        self.await_rpcs = [False for _ in range(N)]
+        self.pending_rpcs_count = 0
+
+        # self.pending_rpc = None
+        # self.await_rpc = False
 
         self.actor_rref = self.spawn_actors(learner_rref=RRef(self),
                                             env_name=env_name,
@@ -166,77 +170,104 @@ class Learner:
         return actor_rrefs
 
     @async_execution
-    def queue_request(self, *args):
+    def queue_request(self, id, *args):
         """
         Called by actor asynchronously to queue requests
 
         Returns:
-        future (Future.wait): Halts until value is ready
+            future (Future.wait): Halts until value is ready
         """
-        future = self.future1.then(lambda f: f.wait())
+        future = self.request_futures[id].then(lambda f: f.wait())
         with self.lock:
-            self.pending_rpc = args
+            self.pending_rpcs[id] = (id, *args)
+            self.pending_rpcs_count += 1
 
         return future
 
     @async_execution
-    def return_episode(self, episode):
+    def return_episode(self, id, episode):
         """
         Called by actor to asynchronously to return completed Episode
         to Learner
 
         Returns:
-        future (Future.wait): Halts until value is ready
+            future (Future.wait): Halts until value is ready
         """
-        future = self.future2.then(lambda f: f.wait())
+        future = self.return_futures[id].then(lambda f: f.wait())
         self.sample_queue.put(episode)
-        self.await_rpc = True
+        self.await_rpcs[id] = True
 
         # Never Give Up
         with self.lock_model:
-            self.episodic_novelty.reset()
+            self.episodic_novelty.reset(id)
 
         return future
 
     @torch.inference_mode()
-    def get_policy(self, obs, state1, state2, beta):
+    def get_policy(self, id, obs, state1, state2, beta):
+        """
+        Args:
+            id (B,): actor IDs
+            obs (B, c, h, w): batched observation
+            state1 (Tuple(B, dim)): batched recurrent state 1
+            state2 (Tuple(B, dim)): batched recurrent state 2
+            beta (B, 1): each actor beta values
+
+        Returns:
+            action (B,): action indices
+            prob (B,): action probabilities
+            state1 (Tuple(B, dim)): batched recurrent state 1
+            state2 (Tuple(B, dim)): batched recurrent state 2
+            intr (B,): each actor intrinsic reward
+        """
+        B = id.size(0)
+
         self.epsilon -= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
 
         with self.lock_model:
             qe, qi, state1, state2 = self.eval_model(obs, state1, state2)
             q_values = rescale(inv_rescale(qe) + beta * inv_rescale(qi))
-            # q_values = qe + beta * qi
 
-            intr_e = self.episodic_novelty.get_reward(obs)
+            intr_e = self.episodic_novelty.get_reward(id, obs)
             intr_l = self.lifelong_novelty.get_reward(obs)
             intr = intr_e * intr_l
 
-            state1 = (state1[0].detach().cpu().numpy(),
-                      state1[1].detach().cpu().numpy())
-            state2 = (state2[0].detach().cpu().numpy(),
-                      state2[1].detach().cpu().numpy())
-
         if random.random() <= self.epsilon:
-            action = random.randrange(0, self.action_size)
-            prob = self.epsilon / self.action_size
+            action = torch.randint(0, self.action_size, size=(B,))
+            prob = torch.full_like(action, self.epsilon / self.action_size)
 
             return action, prob, state1, state2, intr
 
         # get action and probability of that action according to Agent57 (pg 19)
-        action = torch.argmax(q_values.squeeze()).detach().cpu().squeeze().item()
-        prob = 1 - (self.epsilon * ((self.action_size - 1) / self.action_size))
+        action = torch.argmax(q_values.squeeze()).squeeze()
+        prob = torch.full_like(action, 1 - (self.epsilon * ((self.action_size - 1) / self.action_size)))
 
         return action, prob, state1, state2, intr
 
-    def get_action(self, obs, state1, state2, beta):
-        obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0) / 255.
+    def get_action(self, id, obs, state1, state2, beta):
+        """
+        Args:
+            id (int): ID of actor
+            obs (List(np.array)): A list of observations in numpy.uint8
+            state1 (List(Tuple(np.array)): A list of tuples of recurrent states in numpy
+            state2 (List(Tuple(np.array)): A list of tuples of recurrent states in numpy
+            beta (float): The beta value of the actor
+
+        Returns:
+            action (np.array)
+            prob (np.array)
+            state1 (List(Tuple(np.array))
+            state2 (List(Tuple(np.array))
+            beta (int)
+        """
+        obs = torch.tensor(np.stack(obs), dtype=torch.float32, device=self.device) / 255.
         state1 = (torch.tensor(state1[0], dtype=torch.float32, device=self.device),
                   torch.tensor(state1[1], dtype=torch.float32, device=self.device))
         state2 = (torch.tensor(state2[0], dtype=torch.float32, device=self.device),
                   torch.tensor(state2[1], dtype=torch.float32, device=self.device))
 
-        return self.get_policy(obs, state1, state2, beta)
+        return self.get_policy(id, obs, state1, state2, beta)
 
     def answer_requests(self):
         """
@@ -249,22 +280,49 @@ class Learner:
 
             with self.lock:
 
-                # clear self.future2 (store episodes)
-                if self.await_rpc:
-                    self.await_rpc = False
+                # clear self.return_futures to store episodes
+                for i in range(len(self.await_rpcs)):
+                    if self.await_rpcs[i]:
+                        self.await_rpcs[i] = False
 
-                    future = self.future2
-                    self.future2 = Future()
-                    future.set_result(None)
+                        future = self.return_futures[i]
+                        self.return_futures[i] = Future()
+                        future.set_result(None)
 
-                # clear self.future1 (answer requests)
-                if self.pending_rpc is not None:
-                    results = self.get_action(*self.pending_rpc)
-                    self.pending_rpc = None
+                # if self.await_rpc:
+                #     self.await_rpc = False
+                #
+                #     future = self.future2
+                #     self.future2 = Future()
+                #     future.set_result(None)
 
-                    future = self.future1
-                    self.future1 = Future()
-                    future.set_result(results)
+                if self.count == self.N:
+                    results = self.get_action(zip(self.pending_rpcs))
+                    self.pending_rpcs = [None for _ in range(self.N)]
+                    self.pending_rpcs_count = 0
+
+                    for i, result in enumerate(zip(results)):
+                        future = self.request_futures[i]
+                        self.request_futures[i] = Future()
+                        future.set_result(result)
+
+                # clear self.request_futures to answer requests
+                # for i in range(len(self.pending_rpcs)):
+                #     if self.pending_rpcs[i] is not None:
+                #         results = self.get_action(*self.pending_rpcs[i])
+                #         self.pending_rpcs[i] = None
+                #
+                #         future = self.request_futures[i]
+                #         self.request_futures[i] = Future()
+                #         future.set_result(results)
+
+                # if self.pending_rpc is not None:
+                #     results = self.get_action(*self.pending_rpc)
+                #     self.pending_rpc = None
+                #
+                #     future = self.future1
+                #     self.future1 = Future()
+                #     future.set_result(results)
 
     def prepare_data(self):
         """

@@ -18,6 +18,7 @@ class EpisodicNovelty:
     """
 
     def __init__(self,
+                 num_envs,
                  action_size,
                  N=10,
                  lr=5e-4,
@@ -28,6 +29,8 @@ class EpisodicNovelty:
                  device="cuda"
                  ):
 
+        self.num_envs = num_envs
+
         # dimension is always 512
         model = EmbeddingNet(action_size=action_size).to(device)
 
@@ -36,7 +39,7 @@ class EpisodicNovelty:
 
         self.opt = optim.Adam(self.model.parameters(), lr=lr)
 
-        self.index = faiss.IndexFlatL2(512)
+        self.index = [faiss.IndexFlatL2(512) for _ in range(num_envs)]
         self.normalizer = RunningMeanStd()
 
         self.N = N
@@ -45,30 +48,36 @@ class EpisodicNovelty:
         self.max_similarity = max_similarity
         self.c_constant = c_constant
 
-        self.count = 0
+        self.counts = torch.zeros((num_envs,))
 
-    def reset(self):
-        self.index.reset()
-        self.count = 0
+    def reset(self, ids):
+        for id in ids:
+            self.index[id].reset()
+            self.counts[id] = 0
 
-    def add(self, emb):
-        self.index.add(emb)
-        self.count += 1
+    def add(self, ids, emb):
+        for i, id in enumerate(ids):
+            self.index[id].add(emb[i].numpy())
+            self.counts[id] += 1
 
-    def knn_query(self, emb):
-        distance, _ = self.index.search(emb, self.N)
-        return distance
+    def knn_query(self, ids, emb):
+        distances = []
+        for id in ids:
+            distance, _ = self.index[id].search(emb.numpy(), self.N)
+            distances.append(distance)
 
-    def get_reward(self, obs):
-        emb = self.eval_model(obs).cpu().numpy()
+        return torch.tensor(np.stack(distances))
 
-        if self.count < self.N:
-            self.add(emb)
-            return 0.
+    def get_reward(self, ids, obs):
+        emb = self.eval_model(obs)
 
-        dist = self.knn_query(emb).squeeze()
+        # if self.counts[id] < self.N:
+        #     self.add(id, emb)
+        #     return 0.
+
+        dist = self.knn_query(ids, emb)
         self.normalizer.update(dist)
-        self.add(emb)
+        self.add(ids, emb)
 
         # Calculate kernel output
         # print('dist ', dist.mean())
@@ -86,10 +95,10 @@ class EpisodicNovelty:
         # if similarity < 1:
         #     print('dst', distance_rate)
 
-        if np.isnan(similarity) or similarity > self.max_similarity:
-            return 0.
+        mask = (self.counts < self.N) | torch.isnan(similarity) | (similarity > self.max_similarity)
+        intr = torch.where(mask, 0., 1 / similarity)
 
-        return (1 / similarity).item()
+        return intr
 
     def update(self, obs1, obs2, actions):
         emb1 = self.model.forward(obs1)

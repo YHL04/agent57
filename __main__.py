@@ -90,7 +90,7 @@ def main(env_name,
 
 if __name__ == "__main__":
     main(env_name="BreakoutDeterministic-v4",
-         num_actors=1,
+         num_actors=2,
          buffer_size=400_000,
          batch_size=64,
          burnin=0,
