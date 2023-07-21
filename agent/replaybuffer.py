@@ -160,6 +160,7 @@ class ReplayBuffer:
 
             # log
             self.logger.total_frames += episode.length
+            self.logger.beta = episode.beta
 
             # obtain extrinsic reward from purely exploitative policy
             if episode.beta == 0:

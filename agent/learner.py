@@ -34,7 +34,7 @@ class Learner:
     Main class used to train the agent. Called by rpc remote.
     Call run() to start the main training loop.
 
-    Parameters:
+    Args:
         env_name (string): Environment name in gym[atari]
         size (int): The size of the buffer in ReplayBuffer
         B (int): Batch size for training
