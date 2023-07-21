@@ -17,11 +17,11 @@ An unofficial implementation of Agent57 for Atari from DeepMind
 - [X] Lifelong Novelty Module
 - [X] Separate Nets for extrinsic and intrinsic reward
 - [X] Retrace
-     
-- [ ] Reward value rescaling
+- [X] Reward value rescaling
+- [X] Batched Inference (SEEDRL)
+- [X] Adaptive Exploration with meta-controller
+
 - [ ] Prioritized Experience Replay
-- [ ] Adaptive Exploration with meta-controller
-- [ ] Batched Inference (SEEDRL)
 
 
 ## Relevant Papers

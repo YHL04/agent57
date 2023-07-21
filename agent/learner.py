@@ -315,7 +315,7 @@ class Learner:
 
     def sample_controller(self, episode):
         # update controller's policy index with obtained extrinsic reward
-        idx = self.beta.index(episode.beta)
+        idx = self.betas.index(episode.beta)
         self.controller.update(idx, episode.total_extr)
 
         # sample new policy with new beta and discount

@@ -206,7 +206,7 @@ class ReplayBuffer:
                 states1.append(self.buffer[buffer_idx].states1[time_idx])
                 states2.append(self.buffer[buffer_idx].states2[time_idx])
                 dones.append(self.buffer[buffer_idx].dones[time_idx:time_idx+self.T])
-                discounts.append(self.buffer[buffer_idx].discounts)
+                discounts.append(self.buffer[buffer_idx].discount)
 
             obs = torch.tensor(np.stack(obs), dtype=torch.float32) / 255.
             actions = torch.tensor(np.stack(actions), dtype=torch.int32)
@@ -221,7 +221,7 @@ class ReplayBuffer:
             states2 = (states2[:, 0, :], states2[:, 1, :])
 
             dones = torch.tensor(np.stack(dones), dtype=torch.bool)
-            discounts = torch.tensor(np.stack(discounts, dtype=torch.float32))
+            discounts = torch.tensor(np.stack(discounts), dtype=torch.float32)
 
             obs = obs.transpose(0, 1)
             actions = actions.transpose(0, 1)
