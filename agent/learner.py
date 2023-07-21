@@ -55,6 +55,10 @@ class Learner:
     save_every = 100
     device = "cuda"
 
+    bandit_window_size = 90
+    bandit_beta = 1.0
+    bandit_epsilon = 0.5
+
     def __init__(self,
                  env_name,
                  N,
@@ -135,7 +139,11 @@ class Learner:
         self.betas = get_betas(N, self.beta)
         self.discounts = get_discounts(N, self.discount_max, self.discount_min)
 
-        self.controller = UCB()
+        self.controller = UCB(num_arms=self.N,
+                              window_size=self.bandit_window_size,
+                              beta=self.bandit_beta,
+                              epsilon=self.bandit_epsilon
+                              )
 
         self.actor_rref = self.spawn_actors(learner_rref=RRef(self),
                                             env_name=env_name,
@@ -412,10 +420,11 @@ class Learner:
                         states1=block.states1,
                         states2=block.states2,
                         dones=block.dones,
+                        discounts=block.discounts,
                         idxs=block.idxs
                         )
 
-    def update(self, obs, actions, probs, extr, intr, states1, states2, dones, idxs):
+    def update(self, obs, actions, probs, extr, intr, states1, states2, dones, discounts, idxs):
         """
         An update step. Performs a training step, update new recurrent states,
         soft update target model and transfer weights to eval model
@@ -428,7 +437,8 @@ class Learner:
             intr=intr.cuda(),
             states1=(states1[0].cuda(), states1[1].cuda()),
             states2=(states2[0].cuda(), states2[1].cuda()),
-            dones=dones.cuda()
+            dones=dones.cuda(),
+            discounts=discounts.cuda()
         )
         intr_loss = self.train_novelty_step(
             obs=obs.cuda(),
@@ -461,7 +471,7 @@ class Learner:
 
         return loss, intr_loss
 
-    def train_step(self, obs, actions, probs, extr, intr, states1, states2, dones):
+    def train_step(self, obs, actions, probs, extr, intr, states1, states2, dones, discounts):
         """
         Accumulate gradients to increase batch size
         Gradients are cached for n_accumulate steps before optimizer.step()
@@ -526,8 +536,9 @@ class Learner:
         pi_t1 = F.softmax(q1, dim=-1)
         pi_t2 = F.softmax(q2, dim=-1)
 
-        # temporary 0.99
-        discount_t = (~dones).float() * 0.99
+        # not sure how variable discounts are trained
+        # just pass it in for now
+        discount_t = (~dones).float() * discounts
 
         extr_loss = compute_retrace_loss(
             q_t=q1[:-1],
