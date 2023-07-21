@@ -26,7 +26,8 @@ class Episode:
     states2: np.array
     dones: np.array
     length: int
-    beta: int
+    beta: float
+    discount: float
     total_extr: float
     total_intr: float
     total_time: float
@@ -54,15 +55,15 @@ class ReplayBuffer:
     before the main training the loop. The Learner will asynchronously queue
     Episodes into the buffer, log the data, and prepare Block for training.
 
-    Parameters:
-    size (int): Size of self.buffer
-    B (int): Training batch size
-    T (int): Time step length of blocks
-    discount (float): Gamma constant for next q in q learning
-    beta (float): Maximum beta value in Never Give Up agent
-    sample_queue (mp.Queue): FIFO queue to store Episode into ReplayBuffer
-    batch_queue (mp.Queue): FIFO queue to sample batches for training from ReplayBuffer
-    priority_queue (mp.Queue): FIFO queue to update new recurrent states from training to ReplayBuffer
+    Args:
+        size (int): Size of self.buffer
+        B (int): Training batch size
+        T (int): Time step length of blocks
+        discount (float): Gamma constant for next q in q learning
+        beta (float): Maximum beta value in Never Give Up agent
+        sample_queue (mp.Queue): FIFO queue to store Episode into ReplayBuffer
+        batch_queue (mp.Queue): FIFO queue to sample batches for training from ReplayBuffer
+        priority_queue (mp.Queue): FIFO queue to update new recurrent states from training to ReplayBuffer
 
     """
 
@@ -70,7 +71,6 @@ class ReplayBuffer:
                  size,
                  B,
                  T,
-                 discount,
                  beta,
                  sample_queue,
                  batch_queue,
@@ -81,7 +81,6 @@ class ReplayBuffer:
         self.B = B
         self.T = T
 
-        self.discount = discount
         self.beta = beta
 
         self.lock = threading.Lock()
@@ -176,7 +175,7 @@ class ReplayBuffer:
         Finally return finished Block for training.
 
         Returns:
-        block (Block): completed block
+            block (Block): completed block
 
         """
 
@@ -254,13 +253,8 @@ class ReplayBuffer:
         Update recurrent states from new recurrent states obtained during training
         with most up-to-date model weights
 
-        Parameters:
-        idxs (List[List[buffer_idx, time_idx]]): indices of states
-        states (Array[batch_size, block+1, 2, dim]): new recurrent states
-        loss (float): critic loss
-        bert_loss (float): bert loss
-        epsilon (float): epsilon of Learner for logging purposes
-
+        Args:
+            idxs (List[List[buffer_idx, time_idx]]): indices of states
         """
         assert states1.shape == (self.B, self.T+1, 2, 512)
         assert states2.shape == (self.B, self.T+1, 2, 512)
@@ -316,7 +310,7 @@ class LocalBuffer:
         """
         This function is called after every time step to store data into list
 
-        Parameters:
+        Args:
             obs (Array): observed frame
             action (float): recorded action
             reward (float): recorded reward
@@ -330,16 +324,16 @@ class LocalBuffer:
         self.state1_buffer.append(state1)
         self.state2_buffer.append(state2)
 
-    def finish(self, total_time, beta):
+    def finish(self, total_time, beta, discount):
         """
         This function is called after episode ends. lists are
         converted into numpy arrays and lists are cleared for
         next episode
 
-        Parameters:
-            tickers (List[2]): List of tickers e.g. ["AAPL", "GOOGL"]
-            total_reward (float): normalized total reward for benchmarking
+        Args:
             total_time (float): total time for actor to complete episode in seconds
+            beta (float): beta associated with that episode
+            discount (float): discount associated with that episode
 
         """
 
@@ -384,6 +378,7 @@ class LocalBuffer:
                        dones=dones,
                        length=length,
                        beta=beta,
+                       discount=discount,
                        total_extr=total_extr,
                        total_intr=total_intr,
                        total_time=total_time

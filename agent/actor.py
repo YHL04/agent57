@@ -5,6 +5,7 @@ import numpy as np
 
 from .replaybuffer import LocalBuffer
 from environment import Env
+from utils import tosqueeze
 
 
 def sigmoid(x):
@@ -18,20 +19,20 @@ class Actor:
     Episode to Learner through rpc. All communication is through numpy array.
 
 
-
-    Parameters:
+    Args:
         learner_rref (RRef): Learner RRef to reference the learner
         id (int): ID of the actor
         env_name (string): Environment name
-        N (int): Number of environments with different betas and discount
+        beta (float): initial beta value of actor
+        discount (float): initial discount value of actor
     """
 
-    def __init__(self, learner_rref, id, env_name, beta, gamma):
+    def __init__(self, learner_rref, id, env_name, beta, discount):
         self.learner_rref = learner_rref
         self.id = id
 
         self.beta = beta
-        self.gamma = gamma
+        self.discount = discount
 
         self.env = Env(env_name)
         self.local_buffer = LocalBuffer()
@@ -91,13 +92,14 @@ class Actor:
                 next_obs, reward, done = self.env.step(action)
 
                 self.local_buffer.add(obs, action, prob, reward, intr,
-                                      (state1[0].squeeze(), state1[1].squeeze()),
-                                      (state2[0].squeeze(), state2[1].squeeze()))
+                                      tuple(map(tosqueeze, state1)),
+                                      tuple(map(tosqueeze, state2))
+                                      )
 
                 obs = next_obs
                 state1 = next_state1
                 state2 = next_state2
 
-            episode = self.local_buffer.finish(time.time()-start, self.beta)
+            episode = self.local_buffer.finish(time.time()-start, self.beta, self.discount)
             self.return_episode(episode).wait()
 

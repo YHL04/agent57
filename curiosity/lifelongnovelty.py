@@ -33,22 +33,24 @@ class LifelongNovelty:
     def normalize_reward(self, reward):
         """Compute returns then normalize the intrinsic reward based on these returns"""
 
-        self.normalizer.update_single(reward)
+        self.normalizer.update(reward.cpu().numpy())
 
-        norm_reward = reward / np.sqrt(self.normalizer.var + 1e-8)
-        return norm_reward.item()
+        norm_reward = reward / torch.sqrt(torch.tensor(self.normalizer.var, device=reward.device) + 1e-8)
+        return norm_reward
 
-    def get_reward(self, obs):
+    @torch.no_grad()
+    def get_reward(self, obs, device="cpu"):
 
         # ngu paper normalizes obs but we dont since its already 0-1
         pred = self.predictor(obs)
         target = self.target(obs)
 
-        reward = torch.square(pred - target).mean().detach().cpu().item()
+        reward = torch.square(pred - target).mean(-1)
         reward = self.normalize_reward(reward)
-        reward = min(max(reward, 1), self.L)
+        reward = torch.minimum(torch.maximum(reward, torch.tensor(1., device=reward.device)),
+                               torch.tensor(self.L, device=reward.device))
 
-        return reward
+        return reward.to(device)
 
     def update(self, obs):
         target = self.predictor(obs)

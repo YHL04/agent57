@@ -23,7 +23,8 @@ from .replaybuffer import ReplayBuffer
 
 from models import Model
 from curiosity import EpisodicNovelty, LifelongNovelty
-from utils import compute_retrace_loss, rescale, inv_rescale
+from utils import compute_retrace_loss, rescale, inv_rescale, get_betas, get_discounts, \
+    tonumpy, tosqueeze, tounsqueeze, totensor, toconcat
 
 
 class Learner:
@@ -44,8 +45,9 @@ class Learner:
     epsilon_decay = 0.0001
 
     lr = 1e-4
-    discount = 0.95
     beta = 0.3
+    discount_max = 0.997
+    discount_min = 0.99
 
     update_every = 1000
     save_every = 100
@@ -111,7 +113,6 @@ class Learner:
         self.replay_buffer = ReplayBuffer(size=size,
                                           B=B,
                                           T=burnin+rollout,
-                                          discount=self.discount,
                                           beta=self.beta,
                                           sample_queue=self.sample_queue,
                                           batch_queue=self.batch_queue,
@@ -129,21 +130,25 @@ class Learner:
         # self.pending_rpc = None
         # self.await_rpc = False
 
+        self.betas = get_betas(N, self.beta)
+        self.discounts = get_discounts(N, self.discount_max, self.discount_min)
+
         self.actor_rref = self.spawn_actors(learner_rref=RRef(self),
                                             env_name=env_name,
                                             N=self.N,
-                                            beta=self.beta
+                                            betas=self.betas,
+                                            discounts=self.discounts
                                             )
 
         self.updates = 0
 
     @staticmethod
-    def spawn_actors(learner_rref, env_name, N, beta):
+    def spawn_actors(learner_rref, env_name, N, betas, discounts):
         """
         Start actor by calling actor.remote().run()
         Actors communicate with learner through rpc and RRef
 
-        Parameters:
+        Args:
             learner_rref (RRef): learner RRef for actor to reference the learner
             env_name (string): Name of environment
 
@@ -159,8 +164,8 @@ class Learner:
                                     args=(learner_rref,
                                           i,
                                           env_name,
-                                          N,
-                                          beta
+                                          betas[i],
+                                          discounts[i]
                                           ),
                                     timeout=0
                                     )
@@ -211,7 +216,7 @@ class Learner:
             obs (B, c, h, w): batched observation
             state1 (Tuple(B, dim)): batched recurrent state 1
             state2 (Tuple(B, dim)): batched recurrent state 2
-            beta (B, 1): each actor beta values
+            beta (B,): each actor beta values
 
         Returns:
             action (B,): action indices
@@ -227,7 +232,7 @@ class Learner:
 
         with self.lock_model:
             qe, qi, state1, state2 = self.eval_model(obs, state1, state2)
-            q_values = rescale(inv_rescale(qe) + beta * inv_rescale(qi))
+            q_values = rescale(inv_rescale(qe) + beta.unsqueeze(-1) * inv_rescale(qi))
 
             intr_e = self.episodic_novelty.get_reward(id, obs)
             intr_l = self.lifelong_novelty.get_reward(obs)
@@ -240,19 +245,22 @@ class Learner:
             return action, prob, state1, state2, intr
 
         # get action and probability of that action according to Agent57 (pg 19)
-        action = torch.argmax(q_values.squeeze()).squeeze()
+        action = torch.argmax(q_values, dim=-1).squeeze()
         prob = torch.full_like(action, 1 - (self.epsilon * ((self.action_size - 1) / self.action_size)))
 
         return action, prob, state1, state2, intr
 
     def get_action(self, id, obs, state1, state2, beta):
         """
+        Convert everything into tensor and into the right shape to pass
+        into get_policy() and then convert everything back to numpy.
+
         Args:
-            id (int): ID of actor
+            id (List(int)): ID of actor
             obs (List(np.array)): A list of observations in numpy.uint8
             state1 (List(Tuple(np.array)): A list of tuples of recurrent states in numpy
             state2 (List(Tuple(np.array)): A list of tuples of recurrent states in numpy
-            beta (float): The beta value of the actor
+            beta (List(float)): The beta value of the actor
 
         Returns:
             action (np.array)
@@ -261,13 +269,37 @@ class Learner:
             state2 (List(Tuple(np.array))
             beta (int)
         """
-        obs = torch.tensor(np.stack(obs), dtype=torch.float32, device=self.device) / 255.
-        state1 = (torch.tensor(state1[0], dtype=torch.float32, device=self.device),
-                  torch.tensor(state1[1], dtype=torch.float32, device=self.device))
-        state2 = (torch.tensor(state2[0], dtype=torch.float32, device=self.device),
-                  torch.tensor(state2[1], dtype=torch.float32, device=self.device))
+        # state1 = List((h, c)) to batched (h, c)
 
-        return self.get_policy(id, obs, state1, state2, beta)
+        id = torch.tensor(id, device=self.device)
+        obs = torch.tensor(np.stack(obs), dtype=torch.float32, device=self.device) / 255.
+
+        # list of tuples to size 2 tuple of lists
+        state1 = tuple(map(list, zip(*state1)))
+        state2 = tuple(map(list, zip(*state2)))
+        # concatenate lists inside tuple
+        state1 = tuple(map(totensor, tuple(map(toconcat, state1))))
+        state2 = tuple(map(totensor, tuple(map(toconcat, state2))))
+        # tuple of two batched tensors
+        beta = torch.tensor(beta, device=self.device)
+
+        action, prob, state1, state2, beta = self.get_policy(id, obs, state1, state2, beta)
+
+        # state1 = batched (h, c) to List((h, c))
+
+        action = action.cpu().numpy()
+        prob = prob.cpu().numpy()
+
+        # convert states to numpy and separate each array into a list
+        state1 = tuple(map(lambda x: list(np.moveaxis(np.expand_dims(x.cpu().numpy(), 1), 0, 0)), state1))
+        state2 = tuple(map(lambda x: list(np.moveaxis(np.expand_dims(x.cpu().numpy(), 1), 0, 0)), state2))
+        # turn tuple of two lists into lists of size 2 tuples
+        state1 = list(map(list, zip(*state1)))
+        state2 = list(map(list, zip(*state2)))
+
+        beta = beta.cpu().numpy()
+
+        return action, prob, state1, state2, beta
 
     def answer_requests(self):
         """
@@ -296,12 +328,12 @@ class Learner:
                 #     self.future2 = Future()
                 #     future.set_result(None)
 
-                if self.count == self.N:
-                    results = self.get_action(zip(self.pending_rpcs))
+                if self.pending_rpcs_count == self.N:
+                    results = self.get_action(*list(map(list, (zip(*self.pending_rpcs)))))
                     self.pending_rpcs = [None for _ in range(self.N)]
                     self.pending_rpcs_count = 0
 
-                    for i, result in enumerate(zip(results)):
+                    for i, result in enumerate(zip(*results)):
                         future = self.request_futures[i]
                         self.request_futures[i] = Future()
                         future.set_result(result)
@@ -478,7 +510,8 @@ class Learner:
         pi_t1 = F.softmax(q1, dim=-1)
         pi_t2 = F.softmax(q2, dim=-1)
 
-        discount_t = (~dones).float() * self.discount
+        # temporary 0.99
+        discount_t = (~dones).float() * 0.99
 
         extr_loss = compute_retrace_loss(
             q_t=q1[:-1],

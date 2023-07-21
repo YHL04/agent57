@@ -50,33 +50,39 @@ class EpisodicNovelty:
 
         self.counts = torch.zeros((num_envs,))
 
-    def reset(self, ids):
-        for id in ids:
-            self.index[id].reset()
-            self.counts[id] = 0
+    def reset(self, id):
+        self.index[id].reset()
+        self.counts[id] = 0
 
     def add(self, ids, emb):
         for i, id in enumerate(ids):
-            self.index[id].add(emb[i].numpy())
+            self.index[id].add(np.expand_dims(emb[i], 0))
             self.counts[id] += 1
 
     def knn_query(self, ids, emb):
         distances = []
-        for id in ids:
-            distance, _ = self.index[id].search(emb.numpy(), self.N)
+        for i, id in enumerate(ids):
+            distance, _ = self.index[id].search(np.expand_dims(emb[i], 0), self.N)
             distances.append(distance)
 
-        return torch.tensor(np.stack(distances))
+        distances = np.stack(distances)
+        # mask out very big value placeholder by faiss to avoid overflow
+        distances[distances > 1e30] = 0
+        return distances
 
-    def get_reward(self, ids, obs):
-        emb = self.eval_model(obs)
+    @torch.no_grad()
+    def get_reward(self, ids, obs, device="cpu"):
+        ids = ids.cpu().numpy()
+        emb = self.eval_model(obs).cpu().numpy()
 
         # if self.counts[id] < self.N:
         #     self.add(id, emb)
         #     return 0.
 
         dist = self.knn_query(ids, emb)
-        self.normalizer.update(dist)
+        for id in ids:
+            if self.counts[id] >= self.N:
+                self.normalizer.update(dist[id].flatten())
         self.add(ids, emb)
 
         # Calculate kernel output
@@ -95,10 +101,11 @@ class EpisodicNovelty:
         # if similarity < 1:
         #     print('dst', distance_rate)
 
+        similarity = torch.tensor(similarity)
         mask = (self.counts < self.N) | torch.isnan(similarity) | (similarity > self.max_similarity)
         intr = torch.where(mask, 0., 1 / similarity)
 
-        return intr
+        return intr.to(device)
 
     def update(self, obs1, obs2, actions):
         emb1 = self.model.forward(obs1)
