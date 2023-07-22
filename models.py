@@ -70,8 +70,7 @@ class Model(nn.Module):
 
 class EmbeddingNet(nn.Module):
     """
-    Embedding Network first proposed in Never Give Up for
-    exploration
+    Embedding Network first proposed in Never Give Up for exploration
 
     """
 

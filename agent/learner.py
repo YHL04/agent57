@@ -51,8 +51,8 @@ class Learner:
     discount_max = 0.997
     discount_min = 0.99
 
-    update_every = 1000
-    save_every = 100
+    update_every = 400
+    save_every = 400
     device = "cuda"
 
     bandit_window_size = 90
@@ -427,7 +427,7 @@ class Learner:
     def update(self, obs, actions, probs, extr, intr, states1, states2, dones, discounts, idxs):
         """
         An update step. Performs a training step, update new recurrent states,
-        soft update target model and transfer weights to eval model
+        hard update target model occasionally and transfer weights to eval model
         """
         loss, new_states1, new_states2 = self.train_step(
             obs=obs.cuda(),
@@ -459,9 +459,15 @@ class Learner:
         # update new states to buffer
         self.priority_queue.put((idxs, new_states1, new_states2, loss, intr_loss, self.epsilon))
 
-        # soft update target model
+        # hard update target model
         if self.updates % self.update_every == 0:
             self.hard_update(self.target_model, self.model)
+
+        # save model
+        if self.updates % self.save_every == 0:
+            self.save(self.model)
+
+        self.updates += 1
 
         # transfer weights to eval model
         with self.lock_model:
@@ -533,12 +539,14 @@ class Learner:
         q1 = torch.stack(q1)
         q2 = torch.stack(q2)
 
-        pi_t1 = F.softmax(q1, dim=-1)
-        pi_t2 = F.softmax(q2, dim=-1)
+        # BUG FIX: change from q to target_q according to Agent57 (pg 17) "where pi(a|x) is the target policy."
+        pi_t1 = F.softmax(target_q1, dim=-1)
+        pi_t2 = F.softmax(target_q2, dim=-1)
 
         # not sure how variable discounts are trained
         # just pass it in for now
-        discount_t = (~dones).float() * discounts
+        # discount_t = (~dones).float() * discounts
+        discount_t = (~dones).float() * 0.99
 
         extr_loss = compute_retrace_loss(
             q_t=q1[:-1],
@@ -624,4 +632,8 @@ class Learner:
         """
         for target_param, param in zip(target.parameters(), source.parameters()):
             target_param.data.copy_(param.data)
+
+    @staticmethod
+    def save(source, path="saved/final"):
+        torch.save(source.state_dict(), path)
 
