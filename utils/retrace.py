@@ -89,7 +89,7 @@ def compute_retrace_target(q_t, a_t, r_t, discount_t, c_t, pi_t):
     return rescale(torch.stack(returns, dim=0).detach())
 
 
-def compute_retrace_loss(q_t, q_t1, a_t, a_t1, r_t, pi_t1, mu_t1, discount_t, lambda_=0.95, eps=1e-8):
+def compute_retrace_loss(q_t, q_t1, a_t, a_t1, r_t, pi_t1, mu_t1, discount_t, is_weights, lambda_=0.95, eps=1e-8):
     """
     Apply inverse of value rescaling before passing into compute_retrace_target()
     Then, apply value rescaling after getting target from compute_retrace_target()
@@ -117,6 +117,7 @@ def compute_retrace_loss(q_t, q_t1, a_t, a_t1, r_t, pi_t1, mu_t1, discount_t, la
     assert pi_t1.shape == (T, B, action_dim)
     assert mu_t1.shape == (T, B)
     assert discount_t.shape == (T, B)
+    assert is_weights.shape == (B,)
 
     with torch.no_grad():
         # get probability of a_t at time t
@@ -131,10 +132,14 @@ def compute_retrace_loss(q_t, q_t1, a_t, a_t1, r_t, pi_t1, mu_t1, discount_t, la
     # get expected q value of taking action a_t
     expected = get_index(q_t, a_t)
 
-    loss = (target - expected) ** 2
+    error = target - expected
+    loss = error ** 2
+
+    # weight loss according to prioritized experience replay and then take mean
+    loss *= is_weights
     loss = loss.mean()
 
-    return loss
+    return loss, error.detach()
 
 
 if __name__ == "__main__":

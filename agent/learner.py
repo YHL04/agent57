@@ -51,7 +51,7 @@ class Learner:
     discount_max = 0.997
     discount_min = 0.99
 
-    update_every = 400
+    update_every = 1 # 400
     save_every = 400
     device = "cuda"
 
@@ -116,12 +116,9 @@ class Learner:
         self.batch_data = []
 
         # start replay buffer
-        self.replay_buffer = ReplayBuffer(size=size,
-                                          B=B,
-                                          T=burnin+rollout,
-                                          beta=self.beta,
-                                          sample_queue=self.sample_queue,
-                                          batch_queue=self.batch_queue,
+        self.replay_buffer = ReplayBuffer(size=size, B=B, burnin=burnin,
+                                          rollout=rollout, T=burnin+rollout, beta=self.beta,
+                                          sample_queue=self.sample_queue, batch_queue=self.batch_queue,
                                           priority_queue=self.priority_queue
                                           )
 
@@ -421,15 +418,16 @@ class Learner:
                         states2=block.states2,
                         dones=block.dones,
                         discounts=block.discounts,
+                        is_weights=block.is_weights,
                         idxs=block.idxs
                         )
 
-    def update(self, obs, actions, probs, extr, intr, states1, states2, dones, discounts, idxs):
+    def update(self, obs, actions, probs, extr, intr, states1, states2, dones, discounts, is_weights, idxs):
         """
         An update step. Performs a training step, update new recurrent states,
         hard update target model occasionally and transfer weights to eval model
         """
-        loss, new_states1, new_states2 = self.train_step(
+        loss, new_states1, new_states2, error = self.train_step(
             obs=obs.cuda(),
             actions=actions.cuda(),
             probs=probs.cuda(),
@@ -438,7 +436,8 @@ class Learner:
             states1=(states1[0].cuda(), states1[1].cuda()),
             states2=(states2[0].cuda(), states2[1].cuda()),
             dones=dones.cuda(),
-            discounts=discounts.cuda()
+            discounts=discounts.cuda(),
+            is_weights=is_weights.cuda()
         )
         intr_loss = self.train_novelty_step(
             obs=obs.cuda(),
@@ -456,8 +455,10 @@ class Learner:
         states22 = torch.stack(states22).transpose(0, 1).cpu().numpy()
         new_states2 = np.stack([states21, states22], 2)
 
+        error = error.sum(0).cpu().numpy()
+
         # update new states to buffer
-        self.priority_queue.put((idxs, new_states1, new_states2, loss, intr_loss, self.epsilon))
+        self.priority_queue.put((idxs, new_states1, new_states2, error, loss, intr_loss, self.epsilon))
 
         # hard update target model
         if self.updates % self.update_every == 0:
@@ -477,7 +478,7 @@ class Learner:
 
         return loss, intr_loss
 
-    def train_step(self, obs, actions, probs, extr, intr, states1, states2, dones, discounts):
+    def train_step(self, obs, actions, probs, extr, intr, states1, states2, dones, discounts, is_weights):
         """
         Accumulate gradients to increase batch size
         Gradients are cached for n_accumulate steps before optimizer.step()
@@ -491,6 +492,7 @@ class Learner:
             states1 (B, dim): recurrent states
             states2 (B, dim): recurrent states
             dones (block+1, B): boolean indicating episode termination
+            discounts (block, B): custom discounts for each experience
 
         Returns:
             loss (float): Loss of critic model
@@ -545,38 +547,40 @@ class Learner:
 
         # not sure how variable discounts are trained
         # just pass it in for now
-        # discount_t = (~dones).float() * discounts
-        discount_t = (~dones).float() * 0.99
+        discount_t = (~dones).float() * discounts
 
-        extr_loss = compute_retrace_loss(
+        extr_loss, extr_error = compute_retrace_loss(
             q_t=q1[:-1],
             q_t1=target_q1[1:],
-            a_t=actions[:-1],
-            a_t1=actions[1:],
-            r_t=extr,
+            a_t=actions[self.burnin:-1],
+            a_t1=actions[self.burnin+1:],
+            r_t=extr[self.burnin:],
             pi_t1=pi_t1[1:],
-            mu_t1=probs[1:],
-            discount_t=discount_t
+            mu_t1=probs[self.burnin+1:],
+            discount_t=discount_t[self.burnin:],
+            is_weights=is_weights,
         )
-        intr_loss = compute_retrace_loss(
+        intr_loss, intr_error = compute_retrace_loss(
             q_t=q2[:-1],
             q_t1=target_q2[1:],
-            a_t=actions[:-1],
-            a_t1=actions[1:],
-            r_t=intr,
+            a_t=actions[self.burnin:-1],
+            a_t1=actions[self.burnin+1:],
+            r_t=intr[self.burnin:],
             pi_t1=pi_t2[1:],
-            mu_t1=probs[1:],
-            discount_t=discount_t
+            mu_t1=probs[self.burnin+1:],
+            discount_t=discount_t[self.burnin:],
+            is_weights=is_weights,
         )
 
         loss = extr_loss + intr_loss
 
-        self.opt.zero_grad()
         loss.backward()
         self.opt.step()
+        self.opt.zero_grad()
 
         loss = loss.item()
-        return loss, new_states1, new_states2
+        error = extr_error + intr_error         # not sure how error is weighted
+        return loss, new_states1, new_states2, error
 
     def train_novelty_step(self, obs, actions):
         emb_loss = self.train_emb_step(obs, actions)

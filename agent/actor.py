@@ -33,6 +33,8 @@ class Actor:
         self.env = Env(env_name)
         self.local_buffer = LocalBuffer()
 
+        self.count = 0
+
     def get_action(self, obs, state1, state2, beta):
         """
         Uses learner RRef and rpc async to call queue_request to get action
@@ -99,6 +101,9 @@ class Actor:
                 state1 = next_state1
                 state2 = next_state2
 
-            episode = self.local_buffer.finish(time.time()-start, self.beta, self.discount)
+            episode = self.local_buffer.finish(time.time()-start, self.beta, self.discount,
+                                               "actor{}_{}".format(self.id, self.count))
             self.beta, self.discount = self.return_episode(episode).wait()
+
+            self.count += 1
 
