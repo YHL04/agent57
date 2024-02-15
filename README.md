@@ -3,20 +3,19 @@ An unofficial implementation of Agent57 for Atari from DeepMind
 
 ## Breakout Test Run
 
-<img src="https://github.com/YHL04/agent57/blob/main/results/breakout_test_run.png" alt="drawing" width="600"/>
+<img src="https://github.com/YHL04/agent57/blob/main/learning_curves/breakout_test_run.png" alt="drawing" width="600"/>
 
 ## Features
 
 - [X] Double Q Network
 - [X] Dueling Network Architecture
-- [X] N-step Q Learning
 - [X] Distributed Architecture (Multi Actor)
 - [X] Update new recurrent states after training step
 - [X] LSTM Recurrence
 - [X] Episodic Novelty Module  
 - [X] Lifelong Novelty Module
 - [X] Separate Nets for extrinsic and intrinsic reward
-- [X] Retrace
+- [X] Retrace (Replaced N-Step)
 - [X] Reward value rescaling
 - [X] Batched Inference (SEEDRL)
 - [X] Adaptive Exploration with meta-controller
