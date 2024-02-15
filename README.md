@@ -19,8 +19,8 @@ An unofficial implementation of Agent57 for Atari from DeepMind
 - [X] Reward value rescaling
 - [X] Batched Inference (SEEDRL)
 - [X] Adaptive Exploration with meta-controller
-
-- [ ] Prioritized Experience Replay
+- [X] Prioritized Experience Replay
+- [ ] Find bugs and test for correctness
 
 
 ## Relevant Papers
