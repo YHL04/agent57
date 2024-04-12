@@ -51,22 +51,16 @@ class Learner:
     discount_max = 0.997
     discount_min = 0.99
 
-    update_every = 1 # 400
+    update_every = 400
     save_every = 400
+    eval_every = 1
     device = "cuda"
 
     bandit_window_size = 90
     bandit_beta = 1.0
     bandit_epsilon = 0.5
 
-    def __init__(self,
-                 env_name,
-                 N,
-                 size,
-                 B,
-                 burnin,
-                 rollout
-                 ):
+    def __init__(self, env_name, N, size, B, burnin, rollout):
         torch.manual_seed(0)
         np.random.seed(0)
         random.seed(0)
@@ -116,8 +110,7 @@ class Learner:
         self.batch_data = []
 
         # start replay buffer
-        self.replay_buffer = ReplayBuffer(size=size, B=B, burnin=burnin,
-                                          rollout=rollout, T=burnin+rollout, beta=self.beta,
+        self.replay_buffer = ReplayBuffer(size=size, B=B, T=burnin+rollout, beta=self.beta,
                                           sample_queue=self.sample_queue, batch_queue=self.batch_queue,
                                           priority_queue=self.priority_queue
                                           )
@@ -129,9 +122,6 @@ class Learner:
         self.request_rpcs = [None for _ in range(N)]
         self.return_rpcs = [None for _ in range(N)]
         self.request_rpcs_count = 0
-
-        # self.pending_rpc = None
-        # self.await_rpc = False
 
         self.betas = get_betas(N, self.beta)
         self.discounts = get_discounts(N, self.discount_max, self.discount_min)
@@ -292,7 +282,7 @@ class Learner:
         # tuple of two batched tensors
         beta = torch.tensor(beta, device=self.device)
 
-        action, prob, state1, state2, beta = self.get_policy(id, obs, state1, state2, beta)
+        action, prob, state1, state2, intr = self.get_policy(id, obs, state1, state2, beta)
 
         # state1 = batched (h, c) to List((h, c))
 
@@ -306,9 +296,9 @@ class Learner:
         state1 = list(map(list, zip(*state1)))
         state2 = list(map(list, zip(*state2)))
 
-        beta = beta.cpu().numpy()
+        intr = intr.cpu().numpy()
 
-        return action, prob, state1, state2, beta
+        return action, prob, state1, state2, intr
 
     def sample_controller(self, episode):
         # update controller's policy index with obtained extrinsic reward
@@ -455,7 +445,7 @@ class Learner:
         states22 = torch.stack(states22).transpose(0, 1).cpu().numpy()
         new_states2 = np.stack([states21, states22], 2)
 
-        error = error.sum(0).cpu().numpy()
+        error = torch.abs(error).sum(0).cpu().numpy()
 
         # update new states to buffer
         self.priority_queue.put((idxs, new_states1, new_states2, error, loss, intr_loss, self.epsilon))
@@ -545,8 +535,6 @@ class Learner:
         pi_t1 = F.softmax(target_q1, dim=-1)
         pi_t2 = F.softmax(target_q2, dim=-1)
 
-        # not sure how variable discounts are trained
-        # just pass it in for now
         discount_t = (~dones).float() * discounts
 
         extr_loss, extr_error = compute_retrace_loss(
@@ -574,9 +562,10 @@ class Learner:
 
         loss = extr_loss + intr_loss
 
-        loss.backward()
-        self.opt.step()
         self.opt.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 0.1)
+        self.opt.step()
 
         loss = loss.item()
         error = extr_error + intr_error         # not sure how error is weighted

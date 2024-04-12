@@ -7,7 +7,6 @@ import random
 import numpy as np
 from dataclasses import dataclass
 from typing import List
-from collections import deque
 
 from .logger import Logger
 from .per import SumTree
@@ -26,10 +25,10 @@ class Episode:
     states1: np.array
     states2: np.array
     dones: np.array
+    discounts: np.array
     sumtree: SumTree
     length: int
     beta: float
-    discount: float
     total_extr: float
     total_intr: float
     total_time: float
@@ -71,18 +70,17 @@ class ReplayBuffer:
         priority_queue (mp.Queue): FIFO queue to update new recurrent states from training to ReplayBuffer
 
     """
+    e = 0.01
     p_a = 0.6
     p_beta = 0.4
     p_beta_increment_per_sampling = 0.001
 
-    def __init__(self, size, B, burnin, rollout, T, beta,
+    def __init__(self, size, B, T, beta,
                  sample_queue, batch_queue, priority_queue
                  ):
 
-        self.size = size
+        self.size = int(size)
         self.B = B
-        self.burnin = burnin
-        self.rollout = rollout
         self.T = T
         self.beta = beta
 
@@ -92,21 +90,30 @@ class ReplayBuffer:
         self.priority_queue = priority_queue
 
         # Buffer
-        self.buffer = np.empty((size,), dtype=object)
-        self.ptr, self.count, self.n_entries = 0, 0, 0
+        self.obs = np.zeros((self.size, 4, 105, 80), dtype=np.uint8)
+        self.extr = np.zeros((self.size,), dtype=np.float32)
+        self.intr = np.zeros((self.size,), dtype=np.float32)
+        self.actions = np.zeros((self.size,), dtype=np.float32)
+        self.probs = np.zeros((self.size,), dtype=np.float32)
+        self.states1 = np.zeros((self.size, 2, 512), dtype=np.float32)
+        self.states2 = np.zeros((self.size, 2, 512), dtype=np.float32)
+        self.dones = np.zeros((self.size,), dtype=np.bool)
+        self.discounts = np.zeros((self.size,), dtype=np.float32)
 
         # Global Sum Tree
-        self.sumtree = SumTree(size, max_error=0, fill_zero=True)
+        self.sumtree = SumTree(self.size)
 
         # Logger
         self.logger = Logger()
 
-        self.frames = 0
-        self.max_error = 1
-        self.total_p = 0
+        # Variables
+        self.ptr, self.count, self.frames, self.max_error = 0, 0, 0, 1
 
     def __len__(self):
         return self.count
+
+    def get_priority(self, e):
+        return np.abs(e) + self.e
 
     def start_threads(self):
         """Wrapper function to start all the threads in ReplayBuffer"""
@@ -161,24 +168,29 @@ class ReplayBuffer:
 
         with self.lock:
 
-            # add to buffer
-            self.frames += episode.length
-            # create sum tree for priority queue
-            episode.sumtree = SumTree(episode.length-self.T, self.max_error, fill_zero=False)
-            # subtract entries that will be removed along with episode
-            if self.buffer[self.ptr] is not None:
-                self.n_entries -= episode.length-self.T
             # append episode to buffer
-            self.buffer[self.ptr] = episode
-            # update global sumtree
-            assert episode.sumtree.total() != 0
-            self.sumtree.add(self.ptr, episode.sumtree.total(), got_p=True)
+            length = episode.length
+            if self.ptr + length > self.size:
+                length = self.size-self.ptr
 
-            # increment pointers and counts
-            self.n_entries += episode.length-self.T
+            self.frames += length
 
-            self.count = min(self.count + 1, self.size)
-            self.ptr += 1
+            self.obs[self.ptr:self.ptr+length] = episode.obs[:length]
+            self.extr[self.ptr:self.ptr+length] = episode.extr[:length]
+            self.intr[self.ptr:self.ptr+length] = episode.intr[:length]
+            self.actions[self.ptr:self.ptr+length] = episode.actions[:length]
+            self.probs[self.ptr:self.ptr+length] = episode.probs[:length]
+            self.states1[self.ptr:self.ptr+length] = episode.states1[:length]
+            self.states2[self.ptr:self.ptr+length] = episode.states2[:length]
+            self.dones[self.ptr:self.ptr+length] = episode.dones[:length]
+            self.discounts[self.ptr:self.ptr+length] = episode.discounts[:length]
+
+            for i in range(self.ptr, min(self.ptr+length, self.size-self.T)):
+                self.sumtree.update(i, self.get_priority(self.max_error))
+
+            self.count = min(self.count + length, self.size)
+
+            self.ptr += length
             if self.ptr >= self.size:
                 self.ptr = 0
 
@@ -226,30 +238,25 @@ class ReplayBuffer:
             segment = total / self.B
 
             for i in range(self.B):
-                # normal experience replay
-                # b_idx = random.randrange(0, self.count)
-                # t_idx = random.randrange(0, self.buffer[b_idx].length-self.T)
 
                 # sample from prioritized experience replay
                 a = segment * i
                 b = segment * (i + 1)
                 s = random.uniform(a, b)
 
-                b_idx, p, s = self.sumtree.get(s)
-                t_idx, p, _ = self.buffer[b_idx].sumtree.get(s)
-
+                idx, p, _ = self.sumtree.get(s)
                 priorities.append(p)
-                idxs.append([b_idx, t_idx, self.buffer[b_idx].signature])
+                idxs.append(idx)
 
-                extr.append(self.buffer[b_idx].extr[t_idx:t_idx+self.T])
-                intr.append(self.buffer[b_idx].intr[t_idx:t_idx+self.T])
-                obs.append(self.buffer[b_idx].obs[t_idx:t_idx+self.T+1])
-                actions.append(self.buffer[b_idx].actions[t_idx:t_idx+self.T+1])
-                probs.append(self.buffer[b_idx].probs[t_idx:t_idx+self.T+1])
-                states1.append(self.buffer[b_idx].states1[t_idx])
-                states2.append(self.buffer[b_idx].states2[t_idx])
-                dones.append(self.buffer[b_idx].dones[t_idx:t_idx+self.T])
-                discounts.append(self.buffer[b_idx].discount)
+                obs.append(self.obs[idx:idx+self.T+1])
+                extr.append(self.extr[idx:idx+self.T])
+                intr.append(self.intr[idx:idx+self.T])
+                actions.append(self.actions[idx:idx+self.T+1])
+                probs.append(self.probs[idx:idx+self.T+1])
+                states1.append(self.states1[idx])
+                states2.append(self.states2[idx])
+                dones.append(self.dones[idx:idx+self.T])
+                discounts.append(self.discounts[idx:idx+self.T])
 
             obs = torch.tensor(np.stack(obs), dtype=torch.float32) / 255.
             actions = torch.tensor(np.stack(actions), dtype=torch.int32)
@@ -272,13 +279,13 @@ class ReplayBuffer:
             extr = extr.transpose(0, 1)
             intr = intr.transpose(0, 1)
             dones = dones.transpose(0, 1)
+            discounts = discounts.transpose(0, 1)
 
             # prioritized experience replay
             priorities = torch.tensor(priorities) ** self.p_a
             sampling_probabilities = priorities / priorities.sum()
-            is_weights = torch.pow(self.n_entries * sampling_probabilities, -self.p_beta)
+            is_weights = torch.pow(self.count * sampling_probabilities, -self.p_beta)
             is_weights /= is_weights.max()
-            assert torch.isnan(is_weights).any() == False
 
             assert obs.shape == (self.T+1, self.B, 4, 105, 80)
             assert actions.shape == (self.T+1, self.B)
@@ -288,7 +295,7 @@ class ReplayBuffer:
             assert states1[0].shape == (self.B, 512) and states1[1].shape == (self.B, 512)
             assert states2[0].shape == (self.B, 512) and states2[1].shape == (self.B, 512)
             assert dones.shape == (self.T, self.B)
-            assert discounts.shape == (self.B,)
+            assert discounts.shape == (self.T, self.B)
             assert is_weights.shape == (self.B,)
 
             block = Block(obs=obs,
@@ -316,42 +323,19 @@ class ReplayBuffer:
         """
         assert states1.shape == (self.B, self.T+1, 2, 512)
         assert states2.shape == (self.B, self.T+1, 2, 512)
-        assert errors.shape == (self.B,)
 
         with self.lock:
-
-            for (idx, state1, state2, error) in zip(idxs, states1, states2, errors):
-                # b_idx is the index of episode and t_idx is the starting index of burnin
-                b_idx, t_idx, signature = idx
-
-                if signature != self.buffer[b_idx].signature:
-                    continue
-
-                self.buffer[b_idx].sumtree.update(t_idx, error, got_p=False)
-                self.sumtree.update(b_idx, self.buffer[b_idx].sumtree.total(), got_p=True)
-
-                if error > self.max_error:
-                    self.max_error = error
-
-            # update new state for each sample in batch
-            # for idx, state1, state2 in zip(idxs, states1, states2):
-            #     b_idx, t_idx = idx
-            #
-            #     try:
-            #         self.buffer[b_idx].states1[t_idx:t_idx+self.T+1] = state1
-            #         self.buffer[b_idx].states2[t_idx:t_idx+self.T+1] = state2
-            #
-            #     except IndexError:
-            #         pass
-            #
-            #     except ValueError:
-            #         pass
 
             # log
             self.logger.total_updates += 1
             self.logger.loss = loss
             self.logger.intr_loss = intr_loss
             self.logger.epsilon = epsilon
+
+            for (idx, state1, state2, error) in zip(idxs, states1, states2, errors):
+                self.sumtree.update(idx, self.get_priority(error))
+                if error > self.max_error:
+                    self.max_error = error
 
     def log(self):
         """
@@ -426,7 +410,10 @@ class LocalBuffer:
 
         dones = np.zeros_like(extr)
         dones[-1] = 1
+        discounts = np.full_like(dones, discount)
+
         dones = dones.astype(np.bool)
+        discounts = discounts.astype(np.float32)
 
         length = len(extr)
 
@@ -449,10 +436,10 @@ class LocalBuffer:
                        states1=states1,
                        states2=states2,
                        dones=dones,
+                       discounts=discounts,
                        sumtree=None,
                        length=length,
                        beta=beta,
-                       discount=discount,
                        total_extr=total_extr,
                        total_intr=total_intr,
                        total_time=total_time,

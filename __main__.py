@@ -91,9 +91,9 @@ def main(env_name,
 if __name__ == "__main__":
     main(env_name="BreakoutDeterministic-v4",
          num_actors=2,
-         buffer_size=5_000,  # 400_000,
-         batch_size=32,
-         burnin=3,
+         buffer_size=4e5,
+         batch_size=64,
+         burnin=0,
          rollout=10
          )
 
